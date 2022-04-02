@@ -4,3 +4,10 @@ transformer 4.12.2
 tensorboard 2.7.0
 pytorch_lightning 1.6.0
 numpy 1.19.5
+
+*Data required to run the codes
+dpr: 
+  directory: "data/ms_marco/original/"
+  files: 'top1000.train.txt', 'top1000.dev', 'collection.tsv', 'queries.train.tsv', 'queries.dev.tsv'
+  source: https://microsoft.github.io/msmarco/ or https://microsoft.github.io/msmarco/Datasets
+reranker: None
