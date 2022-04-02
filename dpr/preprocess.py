@@ -7,8 +7,8 @@ import numpy as np
 read_dir = 'data/ms_marco/original'
 write_dir = 'data/ms_marco/dpr'
     
-read_files = ['top1000.train.txt', 'top1000.dev', 'top1000.eval']
-write_files = ['top1000.train.id.npy', 'top1000.dev.id.npy', 'top1000.eval.id.npy']
+read_files = ['top1000.train.txt', 'top1000.dev']#, 'top1000.eval']
+write_files = ['top1000.train.id.npy', 'top1000.dev.id.npy']#, 'top1000.eval.id.npy']
 
 
 if __name__ == '__main__':
