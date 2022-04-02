@@ -1,0 +1,6 @@
+*Used packages
+torch 1.10.1
+transformer 4.12.2
+tensorboard 2.7.0
+pytorch_lightning 1.6.0
+numpy 1.19.5
