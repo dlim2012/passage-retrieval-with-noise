@@ -56,9 +56,6 @@ class Reranker(pl.LightningModule):
         
         # Log loss
         self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        
-
-        #return {'loss': loss}
     
     def configure_optimizers(self):
         
