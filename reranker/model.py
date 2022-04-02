@@ -15,6 +15,9 @@ class Reranker(pl.LightningModule):
         # Cross-entropy loss
         self.criterion = torch.nn.CrossEntropyLoss()
         
+        # Monitor training steps for logging purpose
+        self.steps = torch.tensor(0).type(torch.float32)
+
     def forward(self, x):
         """
         :param x: x['input_ids'] is the input to the BERT
@@ -40,9 +43,12 @@ class Reranker(pl.LightningModule):
         # Compute the cross-entropy loss
         loss = self.criterion(output, batch['labels'])
         
-        # Log loss
+
+        # Save log
+        self.steps += 1
         self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        
+        self.log('steps', self.steps, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+
         # Return loss for backpropagation
         return {'loss': loss}
         
@@ -54,9 +60,9 @@ class Reranker(pl.LightningModule):
         # Compute the cross-entropy loss
         loss = self.criterion(output, batch['labels'])
         
-        # Log loss
+        # Save log
         self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-    
+        
     def configure_optimizers(self):
         
         # Using Adam optimizer as shown in the paper (lr=3e-6, beta1=0.9, beta2=0.999, L2_weight_decay=0.01)
