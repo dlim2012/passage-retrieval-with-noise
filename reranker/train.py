@@ -3,19 +3,25 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from model import Reranker
+from pytorch_lightning.callbacks import ModelCheckpoint
 import pytorch_lightning as pl
 
 # Name of the pre-trained BERT to use
 model_name = 'bert-base-uncased'
 
 # Directory to read data from
-data_dir = 'Data/MS_Marco/rerank'
+data_dir = 'data/ms_marco/rerank'
 
 # Path to read data
 train_input_ids_path = os.path.join(data_dir, 'train_input_ids.npy')
 train_labels_path = os.path.join(data_dir, 'train_labels.npy')
 validation_input_ids_path = os.path.join(data_dir, 'validation_input_ids.npy')
 validation_labels_path = os.path.join(data_dir, 'validation_labels.npy')
+
+# Directory to save checkpoints
+checkpoint_dir = 'checkpoints/reranker/'
+
+every_n_train_steps = 10000
 
 class TokenizedDataset(Dataset):
     """
@@ -52,6 +58,31 @@ if __name__ == '__main__':
     # Use a TensorBoardLogger
     logger = pl.loggers.TensorBoardLogger(save_dir="log/rerank/")
 
+    # Save checkpoint at regular intervals
+    regular_checkpoint = ModelCheckpoint(
+            dirpath=checkpoint_dir,
+            filename="{epoch}-{steps:.0f}",
+            monitor="steps",
+            every_n_train_steps=every_n_train_steps,
+            save_top_k=-1,
+    )
+
+    # Save checkpoint after every epoch
+    epoch_checkpoint = ModelCheckpoint(
+            dirpath=checkpoint_dir,
+            filename="{epoch}-end",
+            monitor="val_loss",
+    )
+
     # Train the model
-    trainer = pl.Trainer(gpus=1, max_epochs=99, logger=logger)
+    trainer = pl.Trainer(
+            gpus=1,
+            max_epochs=1,
+            logger=logger,
+            callbacks=[regular_checkpoint, epoch_checkpoint]
+    )
+
     trainer.fit(model, train_dataloader, validation_dataloader)
+    
+
+
