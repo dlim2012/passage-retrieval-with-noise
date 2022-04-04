@@ -6,22 +6,28 @@ from model import Reranker
 from pytorch_lightning.callbacks import ModelCheckpoint
 import pytorch_lightning as pl
 
-# Name of the pre-trained BERT to use
-model_name = 'bert-base-uncased'
+# Name of the pre-trained BERT to use and some hyperparameters
+model_name, batch_size = 'bert-large-uncased', 4
+
+model_name, batch_size = 'bert-base-uncased', 24
+
+""" memo
+bert-base-uncased: 24(o), 32(x)
+bert-large-uncased: 4(o), 8(x)
+"""
 
 # Directory to read data from
-data_dir = 'data/ms_marco/rerank'
+data_dir = 'data/ms_marco/preprocessed/reranker_0404/'
 
-# Path to read data
-train_input_ids_path = os.path.join(data_dir, 'train_input_ids.npy')
-train_labels_path = os.path.join(data_dir, 'train_labels.npy')
-validation_input_ids_path = os.path.join(data_dir, 'validation_input_ids.npy')
-validation_labels_path = os.path.join(data_dir, 'validation_labels.npy')
+# path format to read data
+input_ids_path = os.path.join(data_dir, '{dataset_type}_input_ids_npr4_{idx}.npy')
+labels_path = os.path.join(data_dir, '{dataset_type}_labels_npr4_{idx}.npy')
+
 
 # Directory to save checkpoints
 checkpoint_dir = 'checkpoints/reranker/'
-
 every_n_train_steps = 10000
+
 
 class TokenizedDataset(Dataset):
     """
@@ -36,24 +42,29 @@ class TokenizedDataset(Dataset):
     def __getitem__(self, idx):
         return {key: val[idx] for key, val in self.data.items()}
 
+def load(path, one_hot=False):
+    return torch.tensor(np.load(path).astype(np.int32))
 
-if __name__ == '__main__':
 
-    # Read data
-    dataset = {'train': dict(), 'validation': dict()}
-    dataset['train']['input_ids'] = torch.tensor(np.load(train_input_ids_path))
-    dataset['train']['labels'] = torch.nn.functional.one_hot(torch.tensor(np.load(train_labels_path))).type(torch.float32)
-    dataset['validation']['input_ids'] = torch.tensor(np.load(validation_input_ids_path))
-    dataset['validation']['labels'] = torch.nn.functional.one_hot(torch.tensor(np.load(validation_labels_path))).type(torch.float32)
+def get_dataloader(dataset_type, idx, shuffle=False):
+    
+    dataset = dict()
+    
+    dataset['input_ids'] = load(input_ids_path.format(dataset_type=dataset_type, idx=idx))
+    dataset['labels'] = load(labels_path.format(dataset_type=dataset_type, idx=idx)).type(torch.float32)
+    
+    train_dataset = TokenizedDataset(dataset)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=10)
+    
+    return train_dataloader
 
-    # Declare train and validation dataloader
-    train_dataset = TokenizedDataset(dataset['train'])
-    train_dataloader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=10)
-    validation_dataset = TokenizedDataset(dataset['validation'])
-    validation_dataloader = DataLoader(validation_dataset, batch_size=16, shuffle=False, num_workers=10)
+
+def main():
 
     # Declare a model
-    model = Reranker(model_name=model_name)
+    linear_scheduler_steps = (50000, 12800000//batch_size+1)
+    model = Reranker(linear_scheduler_steps=linear_scheduler_steps,
+                     model_name=model_name)
 
     # Use a TensorBoardLogger
     logger = pl.loggers.TensorBoardLogger(save_dir="log/rerank/")
@@ -77,12 +88,19 @@ if __name__ == '__main__':
     # Train the model
     trainer = pl.Trainer(
             gpus=1,
-            max_epochs=1,
+            max_epochs=9,
             logger=logger,
             callbacks=[regular_checkpoint, epoch_checkpoint]
     )
-
+    
+    # Get dataloaders
+    train_dataloader = get_dataloader('train', 'all', shuffle=True)
+    validation_dataloader = get_dataloader('validation', '0', shuffle=False) 
+    
     trainer.fit(model, train_dataloader, validation_dataloader)
     
-
-
+if __name__ == '__main__':
+    
+    main()
+    
+    
