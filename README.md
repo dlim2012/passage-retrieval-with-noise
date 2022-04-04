@@ -1,7 +1,3 @@
 # passage-retrieval-with-typos
 
-
-TODO on Monday: Split into two teams for DPR and ColBERT. (top1000 retrieval task)
-
-Reranker TODO:
-  Make validation dataset
+### root/data: https://drive.google.com/drive/u/1/folders/1Rkpn9ALkyNdQgE3ySrpZ7xAxhXpM26rn
