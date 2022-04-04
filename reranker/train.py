@@ -23,6 +23,11 @@ data_dir = 'data/ms_marco/preprocessed/reranker_0404/'
 input_ids_path = os.path.join(data_dir, '{dataset_type}_input_ids_npr4_{idx}.npy')
 labels_path = os.path.join(data_dir, '{dataset_type}_labels_npr4_{idx}.npy')
 
+# Information needed to set linear learning rate scheduler
+total_train_instances = 12800000
+linear_scheduler_steps=(total_train_instances//(batch_size*10),
+                        total_train_instances//batch_size + 1)
+
 
 # Directory to save checkpoints
 checkpoint_dir = 'checkpoints/reranker/'
@@ -62,7 +67,6 @@ def get_dataloader(dataset_type, idx, shuffle=False):
 def main():
 
     # Declare a model
-    linear_scheduler_steps = (50000, 12800000//batch_size+1)
     model = Reranker(linear_scheduler_steps=linear_scheduler_steps,
                      model_name=model_name)
 
@@ -102,5 +106,4 @@ def main():
 if __name__ == '__main__':
     
     main()
-    
     
