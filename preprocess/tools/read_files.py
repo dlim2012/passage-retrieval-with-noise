@@ -16,8 +16,6 @@ def read_texts(path):
             result[int(line[0])] = line[1]
     return result
 
-
-
 def read_qidpidtriples(path, shuffle=False):
     """
     read qidpid triples:
@@ -40,12 +38,12 @@ def read_qidpidtriples(path, shuffle=False):
 def read_top1000_npy(path):
     """
     read top1000 npy files:
-        "data/ms_marco/preprocessed/top1000.train.id.all.npy"
-        "data/ms_marco/preprocessed/top1000.dev.id.all.npy"
-        "data/ms_marco/preprocessed/top1000.train.id.npy"
-        "data/ms_marco/preprocessed/top1000.dev.id.npy"
+        "data/ms_marco/preprocessed/top1000.train.id.all.npy" -> Use this one.
+        "data/ms_marco/preprocessed/top1000.dev.id.all.npy" -> Use this one.
+        "data/ms_marco/preprocessed/top1000.train.id.npy" -> probably not needed.
+        "data/ms_marco/preprocessed/top1000.dev.id.npy" -> probably not needed.
         
-    return: (dict) key(qid), value([top1000 pids])
+    return: (dict) key(qid), value([top1000 pids with -1 for padding])
     
     About 90-95% queries seem to have exactly 1000 pids
     There could be less than or more than 1000 pids for each query
