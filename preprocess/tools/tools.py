@@ -1,15 +1,15 @@
 import numpy as np
 import random
 
-def one_hot_vector(x):
+def one_hot_vector(x, n_values=None):
     """
     :param x: one dimensional list or np.ndarray
     return one hot vector
     """
     x = np.array(x)
-    n_values = np.max(x) + 1
+    if not n_values:
+        n_values = np.max(x) + 1
     return np.eye(n_values)[x]
-
 
 def shuffle_text(read_path, write_path):
     """
