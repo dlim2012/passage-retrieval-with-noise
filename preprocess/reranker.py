@@ -26,6 +26,10 @@ ratio = 1 / neg_per_pos
 
 
 def preprocess_train():
+
+    if not os.path.exists(qidpidtriples_shuffled_file):
+        shuffle_text(qidpidtriples_file, qidpidtriples_shuffled_file)
+
     os.makedirs(save_dir, exist_ok=True)
 
     queries = read_texts(train_query_file)
