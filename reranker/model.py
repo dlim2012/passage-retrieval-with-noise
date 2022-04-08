@@ -16,7 +16,7 @@ class Reranker(pl.LightningModule):
             self.linear = torch.nn.Linear(in_features=1024, out_features=2, bias=True)
         else: # bert-base-uncased:
             self.linear = torch.nn.Linear(in_features=768, out_features=2, bias=True)
-            
+
         # Cross-entropy loss
         weight = None
         if weight:
@@ -30,6 +30,7 @@ class Reranker(pl.LightningModule):
         # counts and step intervals for performance logging
         self.counts = np.zeros(4) + 1e-10
         self.counts_all = np.zeros(4)
+        self.loss_interval = torch.tensor(0).type(torch.float32)
         self.measure_steps = 1000
         
     def forward(self, x):
@@ -38,7 +39,7 @@ class Reranker(pl.LightningModule):
         """
         
         # Calculate the last hidden layer of the output
-        output = self.bert(x['input_ids']).last_hidden_state
+        output = self.bert(input_ids=x['input_ids'], attention_mask=x['attention_mask']).last_hidden_state
 
         # Use the <CLS> vector only
         output = output[:, 0, :]
@@ -56,20 +57,24 @@ class Reranker(pl.LightningModule):
         
         # Compute the cross-entropy loss
         loss = self.criterion(output, batch['labels'])
-        
+
         #self.add_results_to_buffer(output, batch['labels'])
         self.add_counts(output, batch['labels'])
+        self.loss_interval += loss.cpu().detach().clone()
 
         # Save log
         self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('steps', self.steps, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        
+
         if self.steps % self.measure_steps == 0:
             self.log_performance(log_type='train_step', on_step=True)
-            
+            loss_interval = self.loss_interval / self.measure_steps
+            self.log('loss_interval', loss_interval, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+            self.loss_interval = 0
+
         # Return loss for backpropagation
         return {'loss': loss}
-    
+
     def train_epoch_end(self, outputs):
         self.log_performance(log_type='train_all', on_step=False)
         self.log_performance(log_type='train_step', on_step=True)
