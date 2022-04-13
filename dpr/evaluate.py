@@ -70,6 +70,39 @@ def collate_fn(lines):
     x['passage_input_ids'], x['passage_attention_mask'] = tokenize(lines)
     return x
 
+def read_texts(text_file):
+    # Read passages and queries
+    texts = dict()
+    with open(text_file, 'r') as file:
+        reader = csv.reader(file, delimiter='\t')
+        for i, line in enumerate(reader):
+            text_id, text = int(line[0]), line[1]
+            texts[text_id] = text
+    return texts
+
+def read_qrels(qrels_file):
+    # Read qrels
+    qrels = defaultdict(lambda: [])
+    with open(qrels_file, 'r') as file:
+        reader = csv.reader(file, delimiter='\t')
+        for i, line in enumerate(reader):
+            qid, pid = int(line[0]), int(line[2])
+            qrels[qid].append(pid)
+    return qrels
+
+def read_top1000(top1000_file):
+    # Read top1000
+    top1000 = dict()
+    with open(top1000_file, 'r') as file:
+        reader = csv.reader(file, delimiter='\t')
+        for i, line in enumerate(reader):
+            line = list(map(int, line))
+            #for j, text_id in enumerate(line):
+                #if text_id == -1:
+                #    continue # Only using top 1000
+            top1000[line[0]] = line[1:]
+    return top1000
+
 def mrr(ranks, Q):
     """
     Calculate the MRR(mean reciprocal rank) given the minimum ranks and Q
@@ -91,42 +124,11 @@ def main():
     model = DPR.load_from_checkpoint(checkpoint_path).to(device).eval()
     print('model loaded from checkpoint %s' % checkpoint_path)
 
-    #passage_vectors = torch.tensor(np.load(passage_vectors_npy)) # shape: (N, d) N ~= 8 million
-
-    # Read passage ids
-    passages = dict()
-    with open(passage_file, 'r') as file:
-        reader = csv.reader(file, delimiter='\t')
-        for i, line in enumerate(reader):
-            pid, passage = int(line[0]), line[1]
-            passages[pid] = passage
-
-    # Read queries
-    queries = dict()
-    with open(query_file, 'r') as file:
-        reader = csv.reader(file, delimiter='\t')
-        for i, line in enumerate(reader):
-            qid, query = int(line[0]), line[1]
-            queries[qid] = query
-
-    # Read qrels
-    qrels = defaultdict(lambda: [])
-    with open(qrels_file, 'r') as file:
-        reader = csv.reader(file, delimiter='\t')
-        for i, line in enumerate(reader):
-            qid, pid = int(line[0]), int(line[2])
-            qrels[qid].append(pid)
-
-    # Read top1000
-    top1000 = dict()
-    with open(top1000_file, 'r') as file:
-        reader = csv.reader(file, delimiter='\t')
-        for i, line in enumerate(reader):
-            line = list(map(int, line))
-            #for j, text_id in enumerate(line):
-                #if text_id == -1:
-                #    continue # Only using top 1000
-            top1000[line[0]] = line[1:]
+    # Read passages, queries, qrels and top 1000.
+    passages = read_texts(passage_file)
+    queries = read_texts(query_file)
+    qrels = read_qrels(qrels_file)
+    top1000 = read_top1000(top1000_file)
 
     ranks = []
     reciprocal_ranks = []
@@ -135,21 +137,23 @@ def main():
         # Get the top 1000 pids for the query
         top1000_pids = top1000[qid]
 
-        # Gather relevant pids
-        rel_pids = []
+        # Gather indices of relevant pids in the top 1000
+        rel_indices = []
         for pid in qrels[qid]:
             # If a relevant passage was not in the top 1000 passages, continue
             # Else, get the index of the relevant passage
             try:
                 idx = top1000_pids.index(pid)
             except ValueError as e:
-                print(e)
+                #print(e)
                 continue
-            rel_pids.append(pid)
+            rel_indices.append(idx)
+
+        #print("\nRelevant passage indices:", rel_indices)
 
         # Pass if there are no relevant passages
-        if len(rel_pids) == 0:
-            print("query with id %d doesn't have any relevant passages" % qid)
+        if len(rel_indices) == 0:
+            #print("query with id %d doesn't have any relevant passages" % qid)
             continue
 
         # Get the query text and compute its <CLS> vector
@@ -159,12 +163,12 @@ def main():
             input_ids=query_input_ids.to(device),
             attention_mask=query_attention_mask.to(device)
         ).last_hidden_state[:, 0, :]
-        #print('query', query_input_ids.shape, query_attention_mask.shape)
 
         # Use a dataloader for efficient computation
         dataset = passage_dataset([passages[pid] for pid in top1000_pids])
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=10, collate_fn=collate_fn)
 
+        # Gather scores for each passage in the top 1000
         results = []
         for batch in tqdm(dataloader, leave=False):
 
@@ -173,7 +177,6 @@ def main():
                 input_ids=batch['passage_input_ids'].to(device),
                 attention_mask=batch['passage_attention_mask'].to(device)
             ).last_hidden_state[:, 0, :]
-            #print('passage', batch['passage_input_ids'].shape, batch['passage_attention_mask'].shape)
 
             # Calculate the scores between query and each passage
             scores = torch.matmul(query_vector, passage_vectors.T).cpu().detach().numpy()
@@ -181,15 +184,15 @@ def main():
             # Append the similarity scores for passages in a batch to a list
             results.append(scores)
 
-        # Get the similarity scores between query and its top 1000 passages in a vector with size (1000,)
+        # Get the similarity scores between query and its top 1000 passages in a 1-dimensional vector
         results = np.concatenate(results, axis=1)[0]
 
-        # argsort the similarity scores in a descending order
+        # argsort the similarity scores in descending order
         argsort = np.argsort(results)[::-1].tolist()
 
         # For each passage that are relevant to the query
         ranks_qid = []
-        for pid in rel_pids:
+        for idx in rel_indices:
 
             # Find the rank
             rank = argsort.index(idx) + 1
@@ -200,13 +203,11 @@ def main():
         ranks.append(min(ranks_qid))
         reciprocal_ranks.append(1/min(ranks_qid))
 
-        # Print out the measurements
-        k = 10
-        print('\trecall: (%d: %.4f), (%d: %.4f), (%d: %.4f), (%d: %.4f)'\
-              % (10, recall(ranks, 10), 20, recall(ranks, 20), 50, recall(ranks, 50), 100, recall(ranks, 100)))
+    # Print out the measurements
+    print('\trecall: (%d: %.4f), (%d: %.4f), (%d: %.4f), (%d: %.4f)'\
+          % (10, recall(ranks, 10), 20, recall(ranks, 20), 50, recall(ranks, 50), 100, recall(ranks, 100)))
+    print('\tmrr: %.4f' % np.mean(reciprocal_ranks))
 
-        print('\tmrr: %.4f' % np.mean(reciprocal_ranks))
-
-
+    
 if __name__ == '__main__':
     main()
