@@ -13,10 +13,6 @@ model_name, batch_size = 'bert-large-uncased', 4
 model_name, batch_size = 'bert-base-uncased', 24
 tokenizer = BertTokenizer.from_pretrained(model_name)
 
-""" memo
-bert-base-uncased: 24(o), 32(x)
-bert-large-uncased: 4(o), 8(x)
-"""
 
 # Directory to read data from
 train_data_file = 'data/ms_marco/preprocessed/reranker/train/qidpidlabel.text.tsv'
@@ -26,10 +22,12 @@ n_train_instances = batch_size * 100000 # 12800000
 linear_scheduler_steps=(n_train_instances//(batch_size*10),
                         n_train_instances//batch_size + 1)
 
-
 # Directory to save checkpoints
-checkpoint_dir = 'checkpoints/reranker/'
-every_n_train_steps = 1000
+checkpoint_dir = 'checkpoints/reranker/0412_1'
+every_n_train_steps = 250
+
+# Directory to save logs
+log_dir = "log/reranker/"
 
 
 
@@ -80,11 +78,12 @@ def collate_fn(data):
         # Token ids for input
         token_ids = [101] + query_token_ids + [102] + passage_token_ids + [102]
 
-
-        attention_mask.append([1] * len(token_ids))
+        # Append input ids, attention masks, and labels to lists
         input_ids.append(token_ids)
+        attention_mask.append([1] * len(token_ids))
         labels.append(int(label))
 
+        # Track the maximum length for padding purpose
         max_len = max(max_len, len(token_ids))
 
     # Pad to the longest length
@@ -100,6 +99,7 @@ def collate_fn(data):
 
 
 def get_dataloader():
+    # Read texts from preprocessed training data
     lines = []
     with open(train_data_file, 'r') as f:
         reader = csv.reader(f, delimiter='\t')
@@ -108,8 +108,13 @@ def get_dataloader():
                 break
             lines.append(line)
 
+    # Make a dataset
     dataset = qidpidlabelDataset(lines)
+    
+    # Make a dataloader using collate_fn
+    # Use multiple processors and tokenize texts on the fly
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=10, collate_fn=collate_fn)
+    
     return dataloader
 
 
@@ -117,11 +122,12 @@ def get_dataloader():
 def main():
 
     # Declare a model
-    model = Reranker(linear_scheduler_steps=linear_scheduler_steps,
+    model = Reranker(linear_scheduler_steps=None,
+                     measure_steps=every_n_train_steps,
                      model_name=model_name)
 
     # Use a TensorBoardLogger
-    logger = pl.loggers.TensorBoardLogger(save_dir="log/rerank/")
+    logger = pl.loggers.TensorBoardLogger(save_dir="log/reranker/")
 
     # Save checkpoint: three lowest loss_interval
     regular_checkpoint = ModelCheckpoint(
@@ -146,17 +152,16 @@ def main():
     # Train the model
     trainer = pl.Trainer(
             gpus=1,
-            max_epochs=9,
+            max_epochs=1,
             logger=logger,
             callbacks=[regular_checkpoint, epoch_checkpoint, lr_monitor]
     )
     
-    
     # Get dataloaders
     train_dataloader = get_dataloader()
     
+    # Train the model
     trainer.fit(model, train_dataloader)
     
 if __name__ == '__main__':
-    
     main()
