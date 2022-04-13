@@ -4,7 +4,7 @@ import pytorch_lightning as pl
 import numpy as np
 
 class Reranker(pl.LightningModule):
-    def __init__(self, linear_scheduler_steps, model_name='bert-large-uncased'):
+    def __init__(self, linear_scheduler_steps=None, measure_steps=250, model_name='bert-large-uncased'):
         super().__init__()
 
         # Download a pre-trained BERT model
@@ -31,7 +31,7 @@ class Reranker(pl.LightningModule):
         self.counts = np.zeros(4) + 1e-10
         self.counts_all = np.zeros(4)
         self.loss_interval = torch.tensor(0).type(torch.float32)
-        self.measure_steps = 1000
+        self.measure_steps = measure_steps
         
     def forward(self, x):
         """
@@ -64,20 +64,44 @@ class Reranker(pl.LightningModule):
 
         # Save log
         self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        self.log('steps', self.steps, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log('steps', self.steps, on_step=True, on_epoch=False, prog_bar=False, logger=True)
 
         if self.steps % self.measure_steps == 0:
-            self.log_performance(log_type='train_step', on_step=True)
+            # log average loss of the past 'measure_steps' steps
             loss_interval = self.loss_interval / self.measure_steps
-            self.log('loss_interval', loss_interval, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-            self.loss_interval = 0
+            self.log('loss_interval', loss_interval, on_step=True, on_epoch=False, prog_bar=True, logger=True)
+
+            # log performance of the past 'measure_steps' steps
+            accuracy, precision, recall, f1 = self.performance(self.counts)
+            self.log('acc', accuracy, on_step=True, on_epoch=False, prog_bar=True, logger=True)
+            self.log('prec', precision, on_step=True, on_epoch=False, prog_bar=True, logger=True)
+            self.log('rec', recall, on_step=True, on_epoch=False, prog_bar=True, logger=True)
+            self.log('f1', f1, on_step=True, on_epoch=False, prog_bar=True, logger=True)
+                     
+            # reset some measurements
+            self.loss_interval = torch.tensor(0).type(torch.float32)
+            self.counts = np.zeros(4) + 1e-10
+
+            # print intermediate results
+            print('accuracy: %.4f, precision: %.4f, recall: %.4f, f1: %.4f, loss_interval: %.4f' \
+                    % (accuracy, precision, recall, f1, loss_interval))
 
         # Return loss for backpropagation
         return {'loss': loss}
 
     def train_epoch_end(self, outputs):
-        self.log_performance(log_type='train_all', on_step=False)
-        self.log_performance(log_type='train_step', on_step=True)
+        
+        # log performance
+        accuracy, precision, recall, f1 = self.performance(self.counts_all)
+        self.log('acc_train_epoch', accuracy, on_step=True, on_epoch=False, prog_bar=False, logger=True)
+        self.log('prec_train_epoch', precision, on_step=True, on_epoch=False, prog_bar=False, logger=True)
+        self.log('rec_train_epoch', recall, on_step=True, on_epoch=False, prog_bar=False, logger=True)
+        self.log('f1_train_epoch', f1, on_step=True, on_epoch=False, prog_bar=False, logger=True)
+
+        # reset performance measurements
+        self.loss_interval = torch.tensor(0).type(torch.float32)
+        self.counts = np.zeros(4) + 1e-10
+        self.counts_all = np.zeros(4)
         
     def validation_step(self, batch, batch_idx):
 
@@ -91,7 +115,16 @@ class Reranker(pl.LightningModule):
         self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         
     def validation_epoch_end(self, outputs):
-        self.log_performance(log_type='validation_all', on_step=False)
+        
+        # log performance
+        accuracy, precision, recall, f1 = self.performance(self.counts_all)
+        self.log('acc_val_epoch', accuracy, on_step=True, on_epoch=False, prog_bar=False, logger=True)
+        self.log('prec_val_epoch', precision, on_step=True, on_epoch=False, prog_bar=False, logger=True)
+        self.log('rec_val_epoch', recall, on_step=True, on_epoch=False, prog_bar=False, logger=True)
+        self.log('f1_val_epoch', f1, on_step=True, on_epoch=False, prog_bar=False, logger=True)
+
+        self.counts_all = np.zeros(4)
+
         
     def configure_optimizers(self):
         
@@ -100,6 +133,9 @@ class Reranker(pl.LightningModule):
         optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, self.parameters()), lr=3e-6, weight_decay=0.01)
         
         # Configuration as in the paper: learning rate warmup over the first 10,000 steps
+        if self.linear_scheduler_steps is None:
+            return [optimizer]
+
         schedulers = [
             {
                 'scheduler': get_linear_schedule_with_warmup(
@@ -111,25 +147,31 @@ class Reranker(pl.LightningModule):
                 'interval': 'step'
             }
         ]
-        
+
         # Difference from the paper: linear decay of learning rate is not applied and we use smaller batch size
         
         return [optimizer], schedulers
     
     def add_counts(self, output, labels):
+        # Get outputs and labels
         output = np.argmax(output.cpu().detach().clone().numpy(), axis=1)
         labels = np.argmax(labels.cpu().detach().clone().numpy(), axis=1)
         
+        # Calculate confusion matrix
         tp = np.sum((output == 1) * (labels == 1))
         fp = np.sum((output == 1) * (labels == 0))
         fn = np.sum((output == 0) * (labels == 1))
         tn = np.sum((output == 0) * (labels == 0))
         
+        # Accumulate the confusion matrix
         self.counts += np.array([tp, fp, fn, tn])
         self.counts_all += np.array([tp, fp, fn, tn])
         
         
     def performance(self, counts):
+        """
+        Calculate accuracy, precision, recall, and f1 score using a accumulated confusion matrix
+        """
         tp, fp, fn, tn = counts
         
         accuracy = (tp + tn) / (tp + fp + tn + fn + 1e-10)
@@ -137,30 +179,5 @@ class Reranker(pl.LightningModule):
         recall = tp / (tp + fn + 1e-10)
         f1 = 2 * precision * recall / (precision + recall + 1e-10)
         return accuracy, precision, recall, f1
-    
-    def log_performance(self, log_type, on_step=True):
-        
-        if log_type == 'train_step':
-            tags = ['acc', 'prec', 'rec', 'f1']
-            counts = self.counts
-        elif log_type == 'train_all':
-            tags = ['acc_all', 'prec_all', 'rec_all', 'f1_all']
-            counts = self.counts_all
-        elif log_type == 'validation_step':
-            tags = ['val_acc', 'val_prec', 'val_rec', 'val_f1']
-            counts = self.counts
-        elif log_type == 'validation_all':
-            tags = ['val_acc_all', 'val_prec_all', 'val_rec_all', 'val_f1_all']
-            counts = self.counts_all
 
-        accuracy, precision, recall, f1 = self.performance(counts)
-            
-        self.log(tags[0], accuracy, on_step=on_step, on_epoch=True, prog_bar=True, logger=True)
-        self.log(tags[1], precision, on_step=on_step, on_epoch=True, prog_bar=True, logger=True)
-        self.log(tags[2], recall, on_step=on_step, on_epoch=True, prog_bar=True, logger=True)
-        self.log(tags[3], f1, on_step=on_step, on_epoch=True, prog_bar=True, logger=True)
-
-        print("%.6f\t%.6f\t%.6f\t%.6f" % (accuracy, precision, recall, f1))
-        self.counts = np.zeros(4)
-        
 
