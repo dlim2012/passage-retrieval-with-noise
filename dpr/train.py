@@ -7,9 +7,13 @@ from transformers import BertTokenizer
 import csv
 import os
 
+# Name of the pre-trained BERT to use and some hyperparameters
 model_name, batch_size = 'bert-base-uncased', 16
+
+# Tokenizer used for the pre-trained BERT
 tokenizer = BertTokenizer.from_pretrained(model_name)
 
+# Directory to read train data from
 qidpidtriples_file = 'data/ms_marco/preprocessed/dpr/train/qidpidtriples.train.full.filtered.text.tsv'
 
 # Information needed to set linear learning rate scheduler
@@ -19,15 +23,18 @@ linear_scheduler_steps=(n_train_triples//(batch_size*10),
 
 
 # Directory to save checkpoints
-checkpoint_dir = 'checkpoints/dpr/'
-every_n_train_steps = 10000
+checkpoint_dir = 'checkpoints/dpr/0413_1/'
+every_n_train_steps = 250
 
-#
+# Directory to save logs
 log_dir = "log/dpr/"
 os.makedirs(log_dir, exist_ok=True)
 
 
 class TriplesDataset(Dataset):
+    """
+    A Dataset class made to use PyTorch DataLoader
+    """
     def __init__(self, inputs):
         self.data = inputs
 
@@ -39,10 +46,16 @@ class TriplesDataset(Dataset):
 
 
 def tokenize(texts):
+    """
+    tokenize texts and return input ids and attention masks
+    """
     inputs = tokenizer(texts, padding="longest", max_length=512, truncation=True)
     return torch.tensor(inputs["input_ids"]), torch.tensor(inputs["attention_mask"])
 
 def collate_fn(data):
+    """
+    Convert query, positive passage, and negative passage to input ids and attention masks
+    """
     x = dict()
     x['query_input_ids'], x['query_attention_mask'] = tokenize([line[0] for line in data])
     x['positive_input_ids'], x['positive_attention_mask'] = tokenize([line[1] for line in data])
@@ -50,6 +63,7 @@ def collate_fn(data):
     return x
 
 def get_dataloader():
+    # Read texts from preprocessed training data
     lines = []
     with open(qidpidtriples_file, 'r') as f:
         reader = csv.reader(f, delimiter='\t')
@@ -57,21 +71,30 @@ def get_dataloader():
             if i == n_train_triples:
                 break
             lines.append(line)
+
+    # Make a dataset
     dataset = TriplesDataset(lines)
+
+    # Make a dataloader using collate_fn
+    # Use multiple processors and tokenize texts on the fly
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=10, collate_fn=collate_fn)
     return dataloader
 
 def main():
     # Declare a model
-    model = DPR(linear_scheduler_steps=linear_scheduler_steps, B=batch_size, model_name=model_name)
+    model = DPR(
+        model_name=model_name,
+        B=batch_size,
+        measure_steps=every_n_train_steps,
+        linear_scheduler_steps=None)
 
     # Use a TensorBoardLogger
-    logger = pl.loggers.TensorBoardLogger(save_dir="log/dpr/")
+    logger = pl.loggers.TensorBoardLogger(save_dir=log_dir)
 
     # Save checkpoint: three lowest loss_interval
     regular_checkpoint = ModelCheckpoint(
         dirpath=checkpoint_dir,
-        filename="{epoch}-{steps:.0f}",
+        filename="{steps:.0f}-{loss_interval:.4e}-{acc:.4f}",
         monitor="loss_interval",
         mode='min',
         every_n_train_steps=every_n_train_steps,
@@ -99,6 +122,7 @@ def main():
     # Get dataloader
     train_dataloader = get_dataloader()
 
+    # Train the model
     trainer.fit(model, train_dataloader)
 
 if __name__ == '__main__':
