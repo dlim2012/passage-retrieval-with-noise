@@ -1,3 +1,10 @@
+"""
+v7: no linear
+v8: removed lr schedule, removed a for loop in loss, using punc_mask, batch size 24
+v9:
+todo: add linear
+"""
+
 from torch.utils.data import Dataset, DataLoader
 import torch
 from model import ColBERT
@@ -7,10 +14,20 @@ from transformers import BertTokenizer
 import csv
 import os
 
-model_name, batch_size = 'bert-base-uncased', 16
-tokenizer = BertTokenizer.from_pretrained(model_name)
 
 qidpidtriples_file = 'data/ms_marco/preprocessed/dpr/train/qidpidtriples.train.full.filtered.text.tsv'
+
+# model, tokenizer configuration
+model_name, batch_size = 'bert-base-uncased', 24
+tokenizer = BertTokenizer.from_pretrained(model_name)
+tokenizer.add_special_tokens({'additional_special_tokens': ['[Q]', '[D]']})
+Q_token_id, D_token_id = tokenizer.convert_tokens_to_ids(['[Q]', '[D]'])
+punctuations = [',', ':', ';', '.', '-', '(', ')', '?', '!', '\"', '\'', '[', ']' '_', '@', '&', '#', '*', '/']
+punctuation_ids = tokenizer.convert_tokens_to_ids(punctuations)
+
+# Learning rate, vector size
+lr = 3e-6
+vector_size = 24
 
 # Information needed to set linear learning rate scheduler
 n_train_triples = batch_size * 200000
@@ -19,8 +36,8 @@ linear_scheduler_steps=(n_train_triples//(batch_size*10),
 
 
 # Directory to save checkpoints
-checkpoint_dir = 'checkpoints/dpr/'
-every_n_train_steps = 10000
+checkpoint_dir = 'checkpoints/colbert/0414_1/'
+every_n_train_steps = 250
 
 #
 log_dir = "log/dpr/"
@@ -38,15 +55,32 @@ class TriplesDataset(Dataset):
         return self.data[idx]
 
 
-def tokenize(texts):
-    inputs = tokenizer(texts, padding="longest", max_length=512, truncation=True)
-    return torch.tensor(inputs["input_ids"]), torch.tensor(inputs["attention_mask"])
+def tokenize(texts, special_token_id):
+    n = len(texts)
+    inputs = tokenizer(texts, padding="longest", max_length=511, truncation=True)
+    input_ids, attention_mask = inputs["input_ids"], inputs["attention_mask"]
+    punctuation_mask = []
+    for i in range(n):
+        input_ids[i] = [input_ids[i][0]] + [special_token_id] + input_ids[i][1:]
+        attention_mask[i] = [1] + attention_mask[i]
+        if special_token_id == Q_token_id:
+            continue
+        punctuation_mask.append([])
+        for j in range(len(input_ids[0])):
+            if input_ids[i][j] == 0 or input_ids[i][j] in punctuation_ids:
+                continue
+            else:
+                punctuation_mask[-1].append(j)
+    return torch.tensor(input_ids), torch.tensor(attention_mask), punctuation_mask
 
 def collate_fn(data):
     x = dict()
-    x['query_input_ids'], x['query_attention_mask'] = tokenize([line[0] for line in data])
-    x['positive_input_ids'], x['positive_attention_mask'] = tokenize([line[1] for line in data])
-    x['negative_input_ids'], x['negative_attention_mask'] = tokenize([line[2] for line in data])
+    x['query_input_ids'], x['query_attention_mask'], _ = \
+        tokenize([line[0] for line in data], Q_token_id)
+    x['positive_input_ids'], x['positive_attention_mask'], x['positive_punc_mask'] = \
+        tokenize([line[1] for line in data], D_token_id)
+    x['negative_input_ids'], x['negative_attention_mask'], x['negative_punc_mask'] = \
+        tokenize([line[2] for line in data], D_token_id)
     return x
 
 def get_dataloader():
@@ -63,7 +97,15 @@ def get_dataloader():
 
 def main():
     # Declare a model
-    model = ColBERT(linear_scheduler_steps=linear_scheduler_steps, B=batch_size, model_name=model_name)
+    model = ColBERT(
+        linear_scheduler_steps=None,#linear_scheduler_steps,
+        B=batch_size,
+        tokenizer=tokenizer,
+        lr=lr,
+        vector_size=vector_size,
+        measure_steps=every_n_train_steps,
+        model_name=model_name,
+    )
 
     # Use a TensorBoardLogger
     logger = pl.loggers.TensorBoardLogger(save_dir="log/dpr/")
