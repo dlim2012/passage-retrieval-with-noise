@@ -4,6 +4,7 @@ v8: removed lr schedule, removed a for loop in loss, using punc_mask, batch size
 v9:
 todo: add linear
 """
+import string
 
 from torch.utils.data import Dataset, DataLoader
 import torch
@@ -13,34 +14,52 @@ import pytorch_lightning as pl
 from transformers import BertTokenizer
 import csv
 import os
+import argparse
+
+def parse():
+    parser = argparse.ArgumentParser()
+    # learning rate
+    parser.add_argument('--lr', type=float, default=3e-6)
+    parser.add_argument('--lr_schedule', type=bool, default=False)
+
+    # good to use this argument in every training step
+    parser.add_argument('--ckpt_dirname',  type=str, default='no_name')
+
+    # other arguments
+    parser.add_argument('--vector_size', type=float, default=128)
+    parser.add_argument('--early_stop', type=bool, default=True)
+    parser.add_argument('--measure_steps', type=int, default=250)
+    parser.add_argument('--batch_size', type=float, default=16)
+
+    return parser.parse_args()
 
 
 qidpidtriples_file = 'data/ms_marco/preprocessed/dpr/train/qidpidtriples.train.full.filtered.text.tsv'
 
 # model, tokenizer configuration
-model_name, batch_size = 'bert-base-uncased', 24
+model_name = 'bert-base-uncased'
 tokenizer = BertTokenizer.from_pretrained(model_name)
 tokenizer.add_special_tokens({'additional_special_tokens': ['[Q]', '[D]']})
 Q_token_id, D_token_id = tokenizer.convert_tokens_to_ids(['[Q]', '[D]'])
-punctuations = [',', ':', ';', '.', '-', '(', ')', '?', '!', '\"', '\'', '[', ']' '_', '@', '&', '#', '*', '/']
-punctuation_ids = tokenizer.convert_tokens_to_ids(punctuations)
+punctuation_ids = set(tokenizer.convert_tokens_to_ids([ch for ch in string.punctuation]))
 
-# Learning rate, vector size
-lr = 3e-6
-vector_size = 24
+# Parse arguments
+args = parse()
 
-# Information needed to set linear learning rate scheduler
-n_train_triples = batch_size * 200000
-linear_scheduler_steps=(n_train_triples//(batch_size*10),
-                        n_train_triples//batch_size + 1)
+# Number of training instances and linear scheduler_steps
+n_train_triples = args.batch_size * 200000
+if not args.lr_schedule:
+    linear_scheduler_steps = None
+else:
+    linear_scheduler_steps = (n_train_triples // (args.batch_size * 10),
+                              n_train_triples // args.batch_size + 1)
 
 
 # Directory to save checkpoints
-checkpoint_dir = 'checkpoints/colbert/0414_1/'
-every_n_train_steps = 250
+checkpoint_dir = os.path.join('checkpoints/colbert/', args.ckpt_dirname)
 
-#
-log_dir = "log/dpr/"
+# Directory to save logs
+log_dir = "log/colbert/"
 os.makedirs(log_dir, exist_ok=True)
 
 
@@ -67,7 +86,9 @@ def tokenize(texts, special_token_id):
             continue
         punctuation_mask.append([])
         for j in range(len(input_ids[0])):
-            if input_ids[i][j] == 0 or input_ids[i][j] in punctuation_ids:
+            if input_ids[i][j] == 0:
+                break
+            elif input_ids[i][j] in punctuation_ids:
                 continue
             else:
                 punctuation_mask[-1].append(j)
@@ -92,19 +113,21 @@ def get_dataloader():
                 break
             lines.append(line)
     dataset = TriplesDataset(lines)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=10, collate_fn=collate_fn)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=10, collate_fn=collate_fn)
     return dataloader
 
 def main():
+
     # Declare a model
     model = ColBERT(
-        linear_scheduler_steps=None,#linear_scheduler_steps,
-        B=batch_size,
+        linear_scheduler_steps=linear_scheduler_steps,
+        B=args.batch_size,
         tokenizer=tokenizer,
-        lr=lr,
-        vector_size=vector_size,
-        measure_steps=every_n_train_steps,
+        lr=args.lr,
+        vector_size=args.vector_size,
+        measure_steps=args.measure_steps,
         model_name=model_name,
+        early_stop=args.early_stop
     )
 
     # Use a TensorBoardLogger
@@ -113,10 +136,10 @@ def main():
     # Save checkpoint: three lowest loss_interval
     regular_checkpoint = ModelCheckpoint(
         dirpath=checkpoint_dir,
-        filename="{epoch}-{steps:.0f}",
+        filename="{steps:.0f}-{loss_interval:.3e}-{acc:.3f}",
         monitor="loss_interval",
         mode='min',
-        every_n_train_steps=every_n_train_steps,
+        every_n_train_steps=args.measure_steps,
         save_top_k=3,
     )
 
@@ -141,6 +164,7 @@ def main():
     # Get dataloader
     train_dataloader = get_dataloader()
 
+    # Train the model
     trainer.fit(model, train_dataloader)
 
 if __name__ == '__main__':
