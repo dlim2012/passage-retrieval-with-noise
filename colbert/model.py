@@ -4,8 +4,18 @@ import pytorch_lightning as pl
 import numpy as np
 
 class ColBERT(pl.LightningModule):
-    def __init__(self, linear_scheduler_steps, B, tokenizer, vector_size=128, lr=3e-6, measure_steps=250, model_name='bert-base-uncased'):
+    def __init__(self,
+                 linear_scheduler_steps,
+                 B,
+                 tokenizer,
+                 vector_size=128,
+                 lr=3e-6,
+                 measure_steps=250,
+                 model_name='bert-base-uncased',
+                 early_stop=True):
+
         super().__init__()
+        self.save_hyperparameters()
 
         self.encoder = BertModel.from_pretrained(model_name)
         self.encoder.resize_token_embeddings(len(tokenizer))
@@ -16,6 +26,7 @@ class ColBERT(pl.LightningModule):
         self.lr = lr
 
         self.labels = torch.cat((torch.eye(B), torch.zeros(B, B)), 1)
+        self.I = torch.eye(self.B)
         self.linear = torch.nn.Linear(in_features=768, out_features=vector_size, bias=True)
 
         self.softmax = torch.nn.Softmax(dim=1)
@@ -26,11 +37,15 @@ class ColBERT(pl.LightningModule):
 
         # counts and step intervals for performance logging
         self.counts = np.zeros(4) # n_correct, n_total, n_correct_epoch, n_total_epoch
-        self.loss_interval = torch.tensor(0).type(torch.float32)
+        self.loss_interval = 0
         self.measure_steps = measure_steps
 
-    #def linear(self, x):
-    #    return x
+        # For early stop
+        self.early_stop = early_stop
+        self.prev_loss_interval = 0
+        self.min_loss_interval = float('inf')
+        self.early_stop_count = 0
+
 
     def forward(self, x):
         """
@@ -48,14 +63,12 @@ class ColBERT(pl.LightningModule):
         positive_vectors = torch.nn.functional.normalize(self.linear(self.encoder(
             input_ids=x['positive_input_ids'],
             attention_mask=x['positive_attention_mask']
-        ).last_hidden_state))    # shape: (B, p1, d)
+        ).last_hidden_state))   # shape: (B, p1, d)
 
         negative_vectors = torch.nn.functional.normalize(self.linear(self.encoder(
             input_ids=x['negative_input_ids'],
             attention_mask=x['negative_attention_mask']
         ).last_hidden_state))    # shape: (B, p2, d)
-
-        # Need to filter punctuation symbols
 
         # Similarity scores
         pos_scores = self.late_interaction(query_vectors, positive_vectors, x['positive_punc_mask']) # shape: (B, B)
@@ -66,17 +79,20 @@ class ColBERT(pl.LightningModule):
     def late_interaction(self, query_vectors, passage_vectors, punc_mask):
         scores = torch.zeros(query_vectors.shape[0], passage_vectors.shape[0])
 
-        for i in range(query_vectors.shape[0]):
-            for j in range(passage_vectors.shape[0]):
-                scores[i, j] = torch.matmul(query_vectors[i], passage_vectors[j][punc_mask[j]].T).max(1).values.sum()
-
         #for i in range(query_vectors.shape[0]):
-        #    scores[i, :] = torch.matmul(query_vectors[i],
-        #    torch.permute(passage_vectors, (0, 2, 1))
-        #    ).max(2).values.sum(1)
-            # matmul shape: (B, q, p)
-            # max shape: (B, q)
-            # shape
+        #    for j in range(passage_vectors.shape[0]):
+        #        scores[i, j] = torch.matmul(query_vectors[i], passage_vectors[j][punc_mask[j]].T).max(1).values.sum()
+
+        for i in range(query_vectors.shape[0]):
+            # Calculate cosine similarity scores between all query vectors and all passage vectors
+            similarities = torch.matmul(query_vectors[i], torch.permute(passage_vectors, (0, 2, 1))).cpu()
+            # shape: (B, q, p)
+            for j in range(passage_vectors.shape[0]):
+                # Filter punctuation vectors from passage vectors
+                # Calculate the maximum similarity for each query vector and sum the results
+                scores[i, j] = similarities[j][:, punc_mask[j]].max(1).values.sum()
+                # max shape: (B, q)
+                # shape: (B,)
 
         return scores
 
@@ -85,7 +101,7 @@ class ColBERT(pl.LightningModule):
         scores = scores.type(torch.float64)
 
         # Calculate the probability of predicting correctly
-        x = torch.sum(torch.softmax(scores, dim=1)[:, :self.B] * torch.eye(self.B), axis=1)
+        x = torch.sum(torch.softmax(scores, dim=1)[:, :self.B] * self.I, axis=1)
 
         # Calculate the negative log likelihood
         x = -1 * torch.log(x)
@@ -94,6 +110,16 @@ class ColBERT(pl.LightningModule):
         loss = torch.mean(x)
 
         return loss
+
+
+    def on_train_batch_start(self, batch, batch_idx):
+        if self.early_stop and self.steps % self.measure_steps == 0:
+            if self.prev_loss_interval > self.min_loss_interval * 1.2:
+                self.early_stop_count += 1
+                if self.early_stop_count == 3:
+                    return -1
+            else:
+                self.early_stop_count = 0
 
     def training_step(self, batch, batch_idx):
         self.steps += 1
@@ -104,7 +130,7 @@ class ColBERT(pl.LightningModule):
 
         # Add results to measurements
         self.add_counts(scores)
-        self.loss_interval += loss.cpu()
+        self.loss_interval += loss.tolist()
 
         # Save log
         self.log('loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
@@ -114,11 +140,13 @@ class ColBERT(pl.LightningModule):
             # Log performance periodically
             accuracy = self.counts[0] / self.counts[1]
             self.loss_interval /= self.measure_steps
+            self.prev_loss_interval = self.loss_interval
+            self.min_loss_interval = min(self.min_loss_interval, self.loss_interval)
 
 
             self.log('acc', accuracy, on_step=True, on_epoch=False, prog_bar=True, logger=True)
             self.log('loss_interval', self.loss_interval, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-            print(accuracy, self.loss_interval.tolist())
+            #print(accuracy, self.loss_interval)
             self.counts[:2] = 0
             self.loss_interval = torch.tensor(0).type(torch.float32)
 
