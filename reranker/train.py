@@ -7,27 +7,51 @@ from model import Reranker
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 import pytorch_lightning as pl
 from transformers import BertTokenizer
+import argparse
+
+
+def parse():
+    parser = argparse.ArgumentParser()
+    # learning rate
+    parser.add_argument('--lr', type=float, default=3e-6)
+    parser.add_argument('--lr_schedule', default=False, action='store_true')
+
+    # good to use this argument in every training
+    parser.add_argument('--ckpt_dirname',  type=str, default='no_name')
+
+    # other arguments
+    parser.add_argument('--model_name', type=str, default='bert-base-uncased')
+    parser.add_argument('--batch_size', type=int, default=24)
+    parser.add_argument('--early_stop', default=False, action='store_true')
+    parser.add_argument('--measure_steps', type=int, default=500)
+
+    return parser.parse_args()
+
+args = parse()
+
 
 # Name of the pre-trained BERT to use and some hyperparameters
-model_name, batch_size = 'bert-large-uncased', 4
-model_name, batch_size = 'bert-base-uncased', 24
-tokenizer = BertTokenizer.from_pretrained(model_name)
+# model_name, batch_size = 'bert-large-uncased', 4
+# model_name, batch_size = 'bert-base-uncased', 24
+tokenizer = BertTokenizer.from_pretrained(args.model_name)
 
-
-# Directory to read data from
-train_data_file = 'data/ms_marco/preprocessed/reranker/train/qidpidlabel.text.tsv'
+# Directory to read train data from
+train_data_file = 'data/ms_marco/preprocessed/reranker/qidpidtriples.train.full.pair_npr4.text.tsv'
 
 # Information needed to set linear learning rate scheduler
-n_train_instances = batch_size * 100000 # 12800000
-linear_scheduler_steps=(n_train_instances//(batch_size*10),
-                        n_train_instances//batch_size + 1)
+n_train_instances = args.batch_size * 100000 # 12800000
+if not args.lr_schedule:
+    linear_scheduler_steps = None
+else:
+    linear_scheduler_steps = (n_train_instances // (args.batch_size * 10),
+                              n_train_instances // args.batch_size + 1)
 
 # Directory to save checkpoints
-checkpoint_dir = 'checkpoints/reranker/0412_1'
-every_n_train_steps = 250
+checkpoint_dir = os.path.join('checkpoints/reranker', args.ckpt_dirname)
 
 # Directory to save logs
 log_dir = "log/reranker/"
+os.makedirs(log_dir, exist_ok=True)
 
 
 
@@ -110,11 +134,11 @@ def get_dataloader():
 
     # Make a dataset
     dataset = qidpidlabelDataset(lines)
-    
+
     # Make a dataloader using collate_fn
     # Use multiple processors and tokenize texts on the fly
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=10, collate_fn=collate_fn)
-    
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=10, collate_fn=collate_fn)
+
     return dataloader
 
 
@@ -123,43 +147,59 @@ def main():
 
     # Declare a model
     model = Reranker(linear_scheduler_steps=None,
-                     measure_steps=every_n_train_steps,
-                     model_name=model_name)
+                     lr=args.lr,
+                     measure_steps=args.measure_steps,
+                     model_name=args.model_name,
+                     early_stop=args.early_stop)
 
     # Use a TensorBoardLogger
-    logger = pl.loggers.TensorBoardLogger(save_dir="log/reranker/")
-
-    # Save checkpoint: three lowest loss_interval
-    regular_checkpoint = ModelCheckpoint(
-            dirpath=checkpoint_dir,
-            filename="{epoch}-{steps:.0f}",
-            monitor="loss_interval",
-            mode='min',
-            every_n_train_steps=every_n_train_steps,
-            save_top_k=3,
-    )
-
-    # Save checkpoint after every epoch
-    epoch_checkpoint = ModelCheckpoint(
-            dirpath=checkpoint_dir,
-            filename="{epoch}-end",
-            monitor="val_loss",
-    )
+    logger = pl.loggers.TensorBoardLogger(save_dir=log_dir)
 
     # Log learning rate
     lr_monitor = LearningRateMonitor(logging_interval='step')
+
+    if args.ckpt_dirname != 'no_name':
+        # Save checkpoint: three lowest loss_interval
+        min_loss_checkpoint = ModelCheckpoint(
+            dirpath=checkpoint_dir,
+            filename="1_{steps:.0f}-{loss:.4e}-{loss_interval:.4e}-{acc:.4f}",
+            monitor="loss",
+            mode='min',
+            every_n_train_steps=100,
+            save_top_k=5,
+        )
+
+        min_loss_interval_checkpoint = ModelCheckpoint(
+            dirpath=checkpoint_dir,
+            filename="2_{steps:.0f}-{loss:.4e}-{loss_interval:.4e}-{acc:.4f}",
+            monitor="loss",
+            mode='min',
+            every_n_train_steps=100,
+            save_top_k=3,
+        )
+
+        # Save checkpoint after every epoch
+        epoch_checkpoint = ModelCheckpoint(
+            dirpath=checkpoint_dir,
+            filename="{epoch}-end",
+            monitor="steps",
+        )
+
+        callbacks = [min_loss_checkpoint, min_loss_interval_checkpoint, epoch_checkpoint, lr_monitor]
+    else:
+        callbacks = [lr_monitor]
     
     # Train the model
     trainer = pl.Trainer(
             gpus=1,
             max_epochs=1,
             logger=logger,
-            callbacks=[regular_checkpoint, epoch_checkpoint, lr_monitor]
+            callbacks=callbacks
     )
-    
+
     # Get dataloaders
     train_dataloader = get_dataloader()
-    
+
     # Train the model
     trainer.fit(model, train_dataloader)
     
