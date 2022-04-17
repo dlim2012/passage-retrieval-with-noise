@@ -20,21 +20,21 @@ def parse():
     parser = argparse.ArgumentParser()
     # learning rate
     parser.add_argument('--lr', type=float, default=3e-6)
-    parser.add_argument('--lr_schedule', type=bool, default=False)
+    parser.add_argument('--lr_schedule', default=False, action='store_true')
 
-    # good to use this argument in every training step
+    # good to use this argument in every training
     parser.add_argument('--ckpt_dirname',  type=str, default='no_name')
 
     # other arguments
     parser.add_argument('--vector_size', type=float, default=128)
-    parser.add_argument('--early_stop', type=bool, default=True)
-    parser.add_argument('--measure_steps', type=int, default=250)
-    parser.add_argument('--batch_size', type=float, default=16)
+    parser.add_argument('--early_stop', default=False, action='store_true')
+    parser.add_argument('--measure_steps', type=int, default=500)
+    parser.add_argument('--batch_size', type=int, default=16)
 
     return parser.parse_args()
 
 
-qidpidtriples_file = 'data/ms_marco/preprocessed/dpr/train/qidpidtriples.train.full.filtered.text.tsv'
+qidpidtriples_file = 'data/ms_marco/preprocessed/dpr/qidpidtriples.train.full.filtered.text.tsv'
 
 # model, tokenizer configuration
 model_name = 'bert-base-uncased'
@@ -131,34 +131,48 @@ def main():
     )
 
     # Use a TensorBoardLogger
-    logger = pl.loggers.TensorBoardLogger(save_dir="log/dpr/")
-
-    # Save checkpoint: three lowest loss_interval
-    regular_checkpoint = ModelCheckpoint(
-        dirpath=checkpoint_dir,
-        filename="{steps:.0f}-{loss_interval:.3e}-{acc:.3f}",
-        monitor="loss_interval",
-        mode='min',
-        every_n_train_steps=args.measure_steps,
-        save_top_k=3,
-    )
-
-    # Save checkpoint after every epoch
-    epoch_checkpoint = ModelCheckpoint(
-        dirpath=checkpoint_dir,
-        filename="{epoch}-end",
-        monitor="steps",
-    )
+    logger = pl.loggers.TensorBoardLogger(save_dir=log_dir)
 
     # Log learning rate
     lr_monitor = LearningRateMonitor(logging_interval='step')
+
+    if args.ckpt_dirname != 'no_name':
+        # Save checkpoint: three lowest loss_interval
+        min_loss_checkpoint = ModelCheckpoint(
+            dirpath=checkpoint_dir,
+            filename="1_{steps:.0f}-{loss:.4e}-{loss_interval:.4e}-{acc:.4f}",
+            monitor="loss",
+            mode='min',
+            every_n_train_steps=100,
+            save_top_k=5,
+        )
+
+        min_loss_interval_checkpoint = ModelCheckpoint(
+            dirpath=checkpoint_dir,
+            filename="2_{steps:.0f}-{loss:.4e}-{loss_interval:.4e}-{acc:.4f}",
+            monitor="loss",
+            mode='min',
+            every_n_train_steps=100,
+            save_top_k=3,
+        )
+
+        # Save checkpoint after every epoch
+        epoch_checkpoint = ModelCheckpoint(
+            dirpath=checkpoint_dir,
+            filename="{epoch}-end",
+            monitor="steps",
+        )
+
+        callbacks = [min_loss_checkpoint, min_loss_interval_checkpoint, epoch_checkpoint, lr_monitor]
+    else:
+        callbacks = [lr_monitor]
 
     # Train the model
     trainer = pl.Trainer(
         gpus=1,
         max_epochs=1,
         logger=logger,
-        callbacks=[regular_checkpoint, epoch_checkpoint, lr_monitor]
+        callbacks=callbacks
     )
 
     # Get dataloader
