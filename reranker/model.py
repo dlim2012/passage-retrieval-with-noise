@@ -4,7 +4,7 @@ import pytorch_lightning as pl
 import numpy as np
 
 class Reranker(pl.LightningModule):
-    def __init__(self, linear_scheduler_steps=None, measure_steps=250, model_name='bert-large-uncased'):
+    def __init__(self, linear_scheduler_steps=None, lr=3e-6, measure_steps=250, model_name='bert-large-uncased', early_stop=False):
         super().__init__()
 
         # Download a pre-trained BERT model
@@ -32,7 +32,25 @@ class Reranker(pl.LightningModule):
         self.counts_all = np.zeros(4)
         self.loss_interval = torch.tensor(0).type(torch.float32)
         self.measure_steps = measure_steps
-        
+
+        # For early stop
+        self.early_stop = early_stop
+        self.prev_loss_interval = 0
+        self.min_loss_interval = float('inf')
+        self.early_stop_count = 0
+
+    def on_train_batch_start(self, batch, batch_idx):
+        """
+        Early stop: when return is -1
+        """
+        if self.early_stop and self.steps % self.measure_steps == 0:
+            if self.prev_loss_interval > self.min_loss_interval * 1.3:
+                self.early_stop_count += 1
+                if self.early_stop_count == 10:
+                    return -1
+            else:
+                self.early_stop_count = 0
+
     def forward(self, x):
         """
         :param x: x['input_ids'] is the input to the BERT
@@ -69,6 +87,9 @@ class Reranker(pl.LightningModule):
         if self.steps % self.measure_steps == 0:
             # log average loss of the past 'measure_steps' steps
             loss_interval = self.loss_interval / self.measure_steps
+            self.prev_loss_interval = self.loss_interval
+            self.min_loss_interval = min(self.min_loss_interval, self.loss_interval)
+
             self.log('loss_interval', loss_interval, on_step=True, on_epoch=False, prog_bar=True, logger=True)
 
             # log performance of the past 'measure_steps' steps
@@ -77,7 +98,7 @@ class Reranker(pl.LightningModule):
             self.log('prec', precision, on_step=True, on_epoch=False, prog_bar=True, logger=True)
             self.log('rec', recall, on_step=True, on_epoch=False, prog_bar=True, logger=True)
             self.log('f1', f1, on_step=True, on_epoch=False, prog_bar=True, logger=True)
-                     
+
             # reset some measurements
             self.loss_interval = torch.tensor(0).type(torch.float32)
             self.counts = np.zeros(4) + 1e-10
@@ -90,7 +111,7 @@ class Reranker(pl.LightningModule):
         return {'loss': loss}
 
     def train_epoch_end(self, outputs):
-        
+
         # log performance
         accuracy, precision, recall, f1 = self.performance(self.counts_all)
         self.log('acc_train_epoch', accuracy, on_step=True, on_epoch=False, prog_bar=False, logger=True)
@@ -115,7 +136,7 @@ class Reranker(pl.LightningModule):
         self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         
     def validation_epoch_end(self, outputs):
-        
+
         # log performance
         accuracy, precision, recall, f1 = self.performance(self.counts_all)
         self.log('acc_val_epoch', accuracy, on_step=True, on_epoch=False, prog_bar=False, logger=True)
@@ -156,13 +177,13 @@ class Reranker(pl.LightningModule):
         # Get outputs and labels
         output = np.argmax(output.cpu().detach().clone().numpy(), axis=1)
         labels = np.argmax(labels.cpu().detach().clone().numpy(), axis=1)
-        
+
         # Calculate confusion matrix
         tp = np.sum((output == 1) * (labels == 1))
         fp = np.sum((output == 1) * (labels == 0))
         fn = np.sum((output == 0) * (labels == 1))
         tn = np.sum((output == 0) * (labels == 0))
-        
+
         # Accumulate the confusion matrix
         self.counts += np.array([tp, fp, fn, tn])
         self.counts_all += np.array([tp, fp, fn, tn])
