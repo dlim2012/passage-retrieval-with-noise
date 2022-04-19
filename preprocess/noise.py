@@ -7,6 +7,8 @@ from textattack.transformations import WordSwapNeighboringCharacterSwap
 #from textattack.transformations import WordSwapChangeLocation
 from textattack.transformations import WordSwapInflections
 #from textattack.transformations.sentence_transformations import BackTranslation
+from textattack.transformations import WordInnerSwapRandom
+
 from textattack.augmentation import Augmenter
 import pandas as pd
 import random
@@ -77,7 +79,8 @@ transformations = {
     'WordSwapRandomCharacterDeletion': WordSwapRandomCharacterDeletion(),
     'WordSwapRandomCharacterSubstitution': WordSwapRandomCharacterSubstitution(),
     'WordSwapNeighboringCharacterSwap': WordSwapNeighboringCharacterSwap(),
-    'word_order_swap': word_order_swap
+    'word_order_swap': WordInnerSwapRandom()
+    #'word_order_swap': word_order_swap
 }
 
 def main():
