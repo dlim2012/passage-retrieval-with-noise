@@ -8,24 +8,31 @@ from tqdm import tqdm
 from collections import defaultdict
 
 import csv
+import argparse
 
+
+def parse():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--ckpt_dir', type=str, default='/mnt/ssd/checkpoints/reranker')
+    parser.add_argument('--ckpt_version', type=str, default='0421_0_lr3e-7_ts2e6_inputv2')
+    parser.add_argument('--ckpt_name', type=str, default='steps=91000_loss-interval=0.2268.pth')
+    return parser.parse_args()
+
+args = parse()
 # Import the model
 from model import Reranker
 
 # Checkpoint path
-checkpoint_dir = 'checkpoints/reranker'
-train_version = '0412_1'
-checkpoint_name = 'epoch=0-steps=10250.ckpt'
-checkpoint_path = os.path.join(checkpoint_dir, train_version, checkpoint_name)
+checkpoint_path = os.path.join(args.ckpt_dir, args.ckpt_version, args.ckpt_name)
 
 # Batch size to use to encode vectors using GPU
 batch_size = 24
 
 # Path to the queries, passages, and top1000
-dev_query_file = 'data/ms_marco/original/queries.dev.tsv'
-passage_file = 'data/ms_marco/original/collection.tsv'
-dev_top1000_file = 'data/ms_marco/preprocessed/top1000.dev.id.tsv'
-dev_qrels_file = 'data/ms_marco/original/qrels.dev.tsv'
+dev_query_file = '/mnt/ssd/data/ms_marco/original/queries.dev.tsv'
+passage_file = '/mnt/ssd/data/ms_marco/original/collection.tsv'
+dev_top1000_file = '/mnt/ssd/data/ms_marco/preprocessed/top1000.dev.id.tsv'
+dev_qrels_file = '/mnt/ssd/data/ms_marco/original/qrels.dev.tsv'
 
 # Trying it with train data
 ###################################################################
@@ -61,42 +68,18 @@ def collate_fn(data):
     """
     Convert query, passage, and label to input_ids, attention_mask, and label
     """
-    input_ids, attention_mask = [], []
-    max_len = -1
+    queries, passages = [], []
+
     for line in data:
-        query, passage, label = line
+        query, passage = line
+        queries.append(query)
+        passages.append(passage)
+        #labels.append(label)
 
-        # Truncate query to have at most 64 tokens
-        query_tokens = tokenizer.tokenize(query)[:64]
+    inputs = tokenizer(queries, passages, padding='longest', truncation=True, return_tensors='pt')
+    #inputs['labels'] = torch.tensor(labels)
 
-        # Convert tokens of query to token ids
-        query_token_ids = tokenizer.convert_tokens_to_ids(query_tokens)
-
-        # Truncate passage so that [<CLS> query <SEP> passage <SEP>] doesn't exceed 512
-        passage_tokens = tokenizer.tokenize(passage)[:509 - len(query_token_ids)]
-
-        # Convert tokens of passage to token ids
-        passage_token_ids = tokenizer.convert_tokens_to_ids(passage_tokens)
-
-        # Token ids for input
-        token_ids = [101] + query_token_ids + [102] + passage_token_ids + [102]
-
-        # Append input ids, attention masks, and labels to lists
-        input_ids.append(token_ids)
-        attention_mask.append([1] * len(token_ids))
-
-        # Track the maximum length for padding purpose
-        max_len = max(max_len, len(token_ids))
-
-    # Pad to the longest length
-    for i in range(len(data)):
-        input_ids[i] = input_ids[i] + [0] * (max_len - len(input_ids[i]))
-        attention_mask[i] = attention_mask[i] + [0] * (max_len - len(attention_mask[i]))
-
-    x = {'input_ids': torch.tensor(input_ids),
-         'attention_mask': torch.tensor(attention_mask)}
-
-    return x
+    return inputs
 
 def read_texts(text_file):
     # Read passages and queries
@@ -156,7 +139,8 @@ def recall(ranks_all, k=10):
     return np.mean(results)
 
 def main():
-    model = Reranker.load_from_checkpoint(checkpoint_path).to(device).eval()
+    model = torch.load(checkpoint_path).to(device)
+    model.train(False)
     print('model loaded from checkpoint %s' % checkpoint_path)
 
     # Read passages, queries, qrels and top 1000.
@@ -167,10 +151,11 @@ def main():
     ranks = []
     ranks_all = []
 
+    no_relevant_count = 0
     query_files = [dev_query_file]
     for query_file in query_files:
         queries = read_texts(query_file)
-        with tqdm(sorted(top1000.keys()), desc='queries') as pbar:
+        with tqdm(sorted(top1000.keys())) as pbar:
 
             for qid in pbar:
 
@@ -191,6 +176,7 @@ def main():
                 # Append meaningless results and continue if there are no relevant passages
                 if len(rel_indices) == 0:
                     ranks.append(1001)
+                    no_relevant_count += 1
                     continue
 
 
@@ -201,17 +187,16 @@ def main():
                 # Gather scores for each passage in the top 1000
                 results = []
                 for batch in dataloader:
-                    x = {'input_ids': batch['input_ids'].to(device),
-                         'attention_mask': batch['attention_mask'].to(device)}
+                    x = {key: value.to(device) for key, value in batch.items()}
 
                     # Calculate the <CLS> vectors for the top 1000 passages
-                    scores = model.forward(x)[1].cpu().detach().numpy()
+                    scores = model.forward(x).logits[:, 1].cpu().detach().numpy()
 
                     # Append the similarity scores for passages in a batch to a list
                     results.append(scores)
 
                 # Get the similarity scores between query and its top 1000 passages in a 1-dimensional vector
-                results = np.concatenate(results, axis=1)[0]
+                results = np.concatenate(results, axis=0)
 
                 # Argsort the similarity scores in descending order
                 argsort = np.argsort(results)[::-1].tolist()
@@ -237,6 +222,8 @@ def main():
                 pbar.set_postfix(postfix)
 
             # Print out the measurements
+            print(checkpoint_path)
+            print('qids with no relevant in top1000:', no_relevant_count)
             print('query file:', query_file)
             print('\tmrr@10: %.4f' % mrr(ranks, 10))
             print('\tmrr@1000: %.4f' % mrr(ranks, 1000))

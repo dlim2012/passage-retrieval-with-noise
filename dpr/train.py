@@ -1,34 +1,37 @@
-from torch.utils.data import Dataset, DataLoader
 import torch
-from model import DPR
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-import pytorch_lightning as pl
+from torch.utils.data import Dataset, DataLoader
+import csv, random
 from transformers import BertTokenizer
-import csv
 import os
+from tqdm import tqdm
+from tensorboardX import SummaryWriter
 
-# Name of the pre-trained BERT to use and some hyperparameters
-model_name, batch_size = 'bert-base-uncased', 16
+from model import DPR
+import argparse
 
-# Tokenizer used for the pre-trained BERT
+
+def parse():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--version_name', type=str, required=True)  # ex. 0419_1_lr1e-6...
+
+    parser.add_argument('--train_data_file', type=str,
+                        default='/mnt/ssd/data/ms_marco/preprocessed/dpr/qidpidtriples.train.full.filtered.text.tsv')
+    parser.add_argument('--batch_size', type=int, default=24)
+    parser.add_argument('--train_steps', type=int, default=200000)
+    parser.add_argument('--lr', type=float, default=3e-6)
+    parser.add_argument('--not_lr_schedule', default=False, action='store_true')
+    parser.add_argument('--measure_steps', type=int, default=2000)
+    return parser.parse_args()
+
+
+args = parse()
+
+#################### Dataloader
+
+model_name = 'bert-base-uncased'
 tokenizer = BertTokenizer.from_pretrained(model_name)
 
-# Directory to read train data from
-qidpidtriples_file = 'data/ms_marco/preprocessed/dpr/train/qidpidtriples.train.full.filtered.text.tsv'
-
-# Information needed to set linear learning rate scheduler
-n_train_triples = batch_size * 200000
-linear_scheduler_steps=(n_train_triples//(batch_size*10),
-                        n_train_triples//batch_size + 1)
-
-
-# Directory to save checkpoints
-checkpoint_dir = 'checkpoints/dpr/0413_1/'
-every_n_train_steps = 250
-
-# Directory to save logs
-log_dir = "log/dpr/"
-os.makedirs(log_dir, exist_ok=True)
+n_train_instances = args.batch_size * args.train_steps  # 12800000
 
 
 class TriplesDataset(Dataset):
@@ -44,86 +47,153 @@ class TriplesDataset(Dataset):
     def __getitem__(self, idx):
         return self.data[idx]
 
-
 def tokenize(texts):
     """
-    tokenize texts and return input ids and attention masks
+    tokenize texts and return input data types
     """
-    inputs = tokenizer(texts, padding="longest", max_length=512, truncation=True)
-    return torch.tensor(inputs["input_ids"]), torch.tensor(inputs["attention_mask"])
+    return tokenizer(texts, padding="longest", max_length=512, truncation=True, return_tensors='pt')
 
 def collate_fn(data):
     """
-    Convert query, positive passage, and negative passage to input ids and attention masks
+    Convert query, positive passage, and negative passage to input data types
     """
     x = dict()
-    x['query_input_ids'], x['query_attention_mask'] = tokenize([line[0] for line in data])
-    x['positive_input_ids'], x['positive_attention_mask'] = tokenize([line[1] for line in data])
-    x['negative_input_ids'], x['negative_attention_mask'] = tokenize([line[2] for line in data])
+    x['queries'] = tokenize([line[0] for line in data])
+    x['positives'] = tokenize([line[1] for line in data])
+    x['negatives'] = tokenize([line[2] for line in data])
     return x
 
-def get_dataloader():
-    # Read texts from preprocessed training data
-    lines = []
-    with open(qidpidtriples_file, 'r') as f:
-        reader = csv.reader(f, delimiter='\t')
-        for i, line in enumerate(reader):
-            if i == n_train_triples:
-                break
-            lines.append(line)
 
-    # Make a dataset
-    dataset = TriplesDataset(lines)
 
-    # Make a dataloader using collate_fn
-    # Use multiple processors and tokenize texts on the fly
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=10, collate_fn=collate_fn)
-    return dataloader
+
+
+#################### Tools
+
+def linear_learning_rate_scheduler(optimizer, steps, target, warm_up, decay):
+    if steps < warm_up:
+        running_lr = target * steps / warm_up
+    else:
+        running_lr = target * (decay - steps) / (decay - warm_up)
+
+    for g in optimizer.param_groups:
+        g['lr'] = running_lr
+    return optimizer, running_lr
+
 
 def main():
-    # Declare a model
-    model = DPR(
-        model_name=model_name,
-        B=batch_size,
-        measure_steps=every_n_train_steps,
-        linear_scheduler_steps=None)
+    #################### Get dataloader
+    
+    # Read training data
+    lines = []
+    with open(args.train_data_file, 'r') as f:
+        reader = csv.reader(f, delimiter='\t')
+        for i, line in enumerate(reader):
+            if i == n_train_instances:
+                break
+            lines.append(line)
+    
+    # Make a dataset
+    dataset = TriplesDataset(lines)
+    
+    # Make a dataloader using collate_fn
+    # Use multiple processors and tokenize texts on the fly
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=10, collate_fn=collate_fn)
+    
+    #################### Train
+    
+    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using {device} device")
+    
+    model = DPR(args.batch_size, device).to(device)
+    # self.criterion = torch.nn.CrossEntropyLoss()
+    # optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=3e-6, weight_decay=0.01)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=0.01)
+    
+    # Save name
+    
+    # Checkpoint directory
+    ckpt_dir = os.path.join('/mnt/ssd/checkpoints/dpr', args.version_name)
+    os.makedirs(ckpt_dir, exist_ok=True)
+    ckpt_name = os.path.join(ckpt_dir, 'steps=%d_loss-interval=%.4f.pth')
+    ckpt_info = [[None, float('inf')] for i in range(5)]
+    
+    # Log directory
+    log_dir = os.path.join('log/dpr/pytorch_logs', args.version_name)
+    # writer = torch.utils.tensorboard.SummaryWriter(log_dir)
+    writer = SummaryWriter(log_dir)
+    os.makedirs(log_dir, exist_ok=True)
+    
+    loss_intervals = []
+    accs = []
+    labels = torch.arange(args.batch_size)
+    for epoch in range(1):
+        running_loss = 0.0
+        running_accuracy = 0.0
+        running_lr = args.lr
+    
+        pbar = tqdm(enumerate(dataloader), total=len(dataloader))
+        for i, data in pbar:
+    
+            if not args.not_lr_schedule:
+                optimizer, running_lr = linear_learning_rate_scheduler(optimizer, i + 1, args.lr, args.train_steps / 10,
+                                                                       args.train_steps)
+    
+            data = {key: value.to(device) for key, value in data.items()}
+            optimizer.zero_grad()
+            scores = model(data).cpu()
+            loss = model.loss(scores)
+            loss.backward()
+            optimizer.step()
+    
+            running_loss += loss.item()
+            running_accuracy += torch.sum((torch.argmax(scores, axis=1) == labels)\
+                                          .type(torch.int32)).detach().tolist()
+    
+            if (i + 1) % args.measure_steps == 0:
+                # model.train(False)
 
-    # Use a TensorBoardLogger
-    logger = pl.loggers.TensorBoardLogger(save_dir=log_dir)
-
-    # Save checkpoint: three lowest loss_interval
-    regular_checkpoint = ModelCheckpoint(
-        dirpath=checkpoint_dir,
-        filename="{steps:.0f}-{loss_interval:.4e}-{acc:.4f}",
-        monitor="loss_interval",
-        mode='min',
-        every_n_train_steps=every_n_train_steps,
-        save_top_k=3,
+                avg_loss = running_loss / args.measure_steps
+                avg_acc = running_accuracy / (args.batch_size * args.measure_steps)
+    
+                # print('%d, %.4f, %.4f' % (i+1, avg_loss, avg_acc))
+                writer.add_scalar('loss', avg_loss, i)
+                writer.add_scalar('acc', avg_acc, i)
+    
+                writer.add_scalar('lr', running_lr, i)
+                loss_intervals.append(avg_loss)
+                accs.append(avg_acc)
+    
+                running_loss = 0.0
+                running_accuracy = 0.0
+                # writer.flush()
+    
+                ckpt_info.sort(key=lambda x: x[1], reverse=True)
+                if avg_loss < ckpt_info[0][1]:
+                    if ckpt_info[0][0] != None:
+                        os.remove(ckpt_info[0][0])
+                    save_name = ckpt_name % (i + 1, avg_loss)
+                    torch.save(model, save_name)
+                    ckpt_info[0] = [save_name, avg_loss]
+    
+                postfix = {'loss_interval': avg_loss, 'acc': avg_acc, 'lr': running_lr}
+                pbar.set_postfix(postfix)
+    
+                # model.train(True)
+    save_name = ckpt_name % (i + 1, avg_loss)
+    torch.save(model, save_name)
+    
+    writer.add_hparams(
+        {"lr": args.lr,
+         "not_lr_schedule": args.not_lr_schedule,
+         "train_steps": args.train_steps,
+         "batch_size": args.batch_size,
+         "train_data_file": args.train_data_file,
+         'ckpt_dir': args.ckpt_dir},
+        {'min_loss': min(loss_intervals),
+         'max_acc': max(accs)}
     )
-
-    # Save checkpoint after every epoch
-    epoch_checkpoint = ModelCheckpoint(
-        dirpath=checkpoint_dir,
-        filename="{epoch}-end",
-        monitor="steps",
-    )
-
-    # Log learning rate
-    lr_monitor = LearningRateMonitor(logging_interval='step')
-
-    # Train the model
-    trainer = pl.Trainer(
-        gpus=1,
-        max_epochs=1,
-        logger=logger,
-        callbacks=[regular_checkpoint, epoch_checkpoint, lr_monitor]
-    )
-
-    # Get dataloader
-    train_dataloader = get_dataloader()
-
-    # Train the model
-    trainer.fit(model, train_dataloader)
-
+    writer.close()
+    
 if __name__ == '__main__':
     main()

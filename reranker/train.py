@@ -1,88 +1,78 @@
-import csv
-import os
-import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-from model import Reranker
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-import pytorch_lightning as pl
+import csv, random
 from transformers import BertTokenizer
-import argparse
+import os
+from tqdm import tqdm
+from tensorboardX import SummaryWriter
 
+from model import Reranker
+import argparse
 
 def parse():
     parser = argparse.ArgumentParser()
-    # learning rate
-    parser.add_argument('--lr', type=float, default=3e-6)
-    parser.add_argument('--lr_schedule', default=False, action='store_true')
-
-    # good to use this argument in every training
-    parser.add_argument('--ckpt_dirname',  type=str, default='no_name')
-
-    # other arguments
-    parser.add_argument('--model_name', type=str, default='bert-base-uncased')
+    parser.add_argument('--version_name', type=str, required=True) # ex. 0419_1_lr1e-6...
+    
+    parser.add_argument('--train_data_file', type=str, default='/mnt/ssd/data/ms_marco/original/triples.train.small.tsv')
     parser.add_argument('--batch_size', type=int, default=24)
-    parser.add_argument('--early_stop', default=False, action='store_true')
-    parser.add_argument('--measure_steps', type=int, default=500)
+    parser.add_argument('--train_steps', type=int, default=100000)
+    parser.add_argument('--npr', type=int, default=1)
+    parser.add_argument('--lr', type=float, default=3e-6)
+    parser.add_argument('--not_lr_schedule', default=False, action='store_true')
+    parser.add_argument('--measure_steps', type=int, default=1000)
 
+    parser.add_argument('--collate_fn2', default=False, action='store_true') # default: collate_fn(No queries[:64])
+    # Initial version was collate_fn2(queries[:64])
     return parser.parse_args()
 
 args = parse()
 
+#################### Dataloader
 
-# Name of the pre-trained BERT to use and some hyperparameters
-# model_name, batch_size = 'bert-large-uncased', 4
-# model_name, batch_size = 'bert-base-uncased', 24
-tokenizer = BertTokenizer.from_pretrained(args.model_name)
+model_name = 'bert-base-uncased'
+tokenizer = BertTokenizer.from_pretrained(model_name)
 
-# Directory to read train data from
-train_data_file = 'data/ms_marco/preprocessed/reranker/qidpidtriples.train.full.pair_npr4.text.tsv'
 
-# Information needed to set linear learning rate scheduler
-n_train_instances = args.batch_size * 100000 # 12800000
-if not args.lr_schedule:
-    linear_scheduler_steps = None
-else:
-    linear_scheduler_steps = (n_train_instances // (args.batch_size * 10),
-                              n_train_instances // args.batch_size + 1)
-
-# Directory to save checkpoints
-checkpoint_dir = os.path.join('checkpoints/reranker', args.ckpt_dirname)
-
-# Directory to save logs
-log_dir = "log/reranker/"
-os.makedirs(log_dir, exist_ok=True)
-
+n_train_instances = args.batch_size * args.train_steps  # 12800000
 
 
 class qidpidlabelDataset(Dataset):
     """
     A Dataset class made to use PyTorch DataLoader
     """
+
     def __init__(self, inputs):
         self.data = inputs
 
     def __len__(self):
         return len(self.data)
-    
+
     def __getitem__(self, idx):
         return self.data[idx]
 
-def one_hot_vector(x, n_values=None):
-    """
-    :param x: one dimensional list or np.ndarray
-    return one hot vector
-    """
-    x = np.array(x)
-    if not n_values:
-        n_values = np.max(x) + 1
-    return np.eye(n_values)[x]
 
 def collate_fn(data):
     """
     Convert query, passage, and label to input_ids, attention_mask, and label
     """
-    input_ids, attention_mask, labels = [], [], []
+
+    queries, passages, labels = [], [], []
+    for line in data:
+        query, passage, label = line
+        queries.append(query)
+        passages.append(passage)
+        labels.append(label)
+
+    inputs = tokenizer(queries, passages, padding='longest', truncation=True, return_tensors='pt')
+    inputs['labels'] = torch.tensor(labels)
+
+    return inputs
+
+def collate_fn_2(data):
+    """
+    Convert query, passage, and label to input_ids, attention_mask, and label
+    """
+    input_ids, attention_mask, token_type_ids, labels = [], [], [], []
     max_len = -1
     for line in data:
         query, passage, label = line
@@ -102,9 +92,12 @@ def collate_fn(data):
         # Token ids for input
         token_ids = [101] + query_token_ids + [102] + passage_token_ids + [102]
 
+        token_type_id = [0] * (len(query_token_ids) + 2) + [1] * (len(passage_token_ids) + 1)
+
         # Append input ids, attention masks, and labels to lists
         input_ids.append(token_ids)
         attention_mask.append([1] * len(token_ids))
+        token_type_ids.append(token_type_id)
         labels.append(int(label))
 
         # Track the maximum length for padding purpose
@@ -114,94 +107,148 @@ def collate_fn(data):
     for i in range(len(data)):
         input_ids[i] = input_ids[i] + [0] * (max_len - len(input_ids[i]))
         attention_mask[i] = attention_mask[i] + [0] * (max_len - len(attention_mask[i]))
+        token_type_ids[i] = token_type_ids[i] + [0] * (max_len - len(token_type_ids[i]))
 
     x = {'input_ids': torch.tensor(input_ids),
          'attention_mask': torch.tensor(attention_mask),
-         'labels': torch.tensor(one_hot_vector(labels, 2))}
+         'labels': torch.tensor(labels)}
 
     return x
 
 
-def get_dataloader():
-    # Read texts from preprocessed training data
+#################### Tools
+
+def linear_learning_rate_scheduler(optimizer, steps, target, warm_up, decay):
+    if steps < warm_up:
+        running_lr = target * steps / warm_up
+    else:
+        running_lr = target * (decay - steps) / (decay - warm_up)
+
+    for g in optimizer.param_groups:
+        g['lr'] = running_lr
+    return optimizer, running_lr
+
+
+
+def main():
+    #################### Get dataloader
+    # Read training data
     lines = []
-    with open(train_data_file, 'r') as f:
+    with open(args.train_data_file, 'r') as f:
         reader = csv.reader(f, delimiter='\t')
         for i, line in enumerate(reader):
-            if i == n_train_instances:
+            if len(lines) == n_train_instances:
                 break
-            lines.append(line)
+            if random.random() < 1 / args.npr:
+                lines.append([line[0], line[1], 1])
+            if len(lines) == n_train_instances:
+                break
+            lines.append([line[0], line[2], 0])
 
     # Make a dataset
     dataset = qidpidlabelDataset(lines)
 
     # Make a dataloader using collate_fn
     # Use multiple processors and tokenize texts on the fly
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=10, collate_fn=collate_fn)
-
-    return dataloader
-
-
-
-def main():
-
-    # Declare a model
-    model = Reranker(linear_scheduler_steps=None,
-                     lr=args.lr,
-                     measure_steps=args.measure_steps,
-                     model_name=args.model_name,
-                     early_stop=args.early_stop)
-
-    # Use a TensorBoardLogger
-    logger = pl.loggers.TensorBoardLogger(save_dir=log_dir)
-
-    # Log learning rate
-    lr_monitor = LearningRateMonitor(logging_interval='step')
-
-    if args.ckpt_dirname != 'no_name':
-        # Save checkpoint: three lowest loss_interval
-        min_loss_checkpoint = ModelCheckpoint(
-            dirpath=checkpoint_dir,
-            filename="1_{steps:.0f}-{loss:.4e}-{loss_interval:.4e}-{acc:.4f}",
-            monitor="loss",
-            mode='min',
-            every_n_train_steps=100,
-            save_top_k=5,
-        )
-
-        min_loss_interval_checkpoint = ModelCheckpoint(
-            dirpath=checkpoint_dir,
-            filename="2_{steps:.0f}-{loss:.4e}-{loss_interval:.4e}-{acc:.4f}",
-            monitor="loss",
-            mode='min',
-            every_n_train_steps=100,
-            save_top_k=3,
-        )
-
-        # Save checkpoint after every epoch
-        epoch_checkpoint = ModelCheckpoint(
-            dirpath=checkpoint_dir,
-            filename="{epoch}-end",
-            monitor="steps",
-        )
-
-        callbacks = [min_loss_checkpoint, min_loss_interval_checkpoint, epoch_checkpoint, lr_monitor]
+    if args.collate_fn2:
+        dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=10,
+                                collate_fn=collate_fn_2)
     else:
-        callbacks = [lr_monitor]
+        dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=10,
+                                collate_fn=collate_fn)
+
+    #################### Train
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using {device} device")
     
-    # Train the model
-    trainer = pl.Trainer(
-            gpus=1,
-            max_epochs=1,
-            logger=logger,
-            callbacks=callbacks
+    model = Reranker().to(device)
+    
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=0.01)
+    
+    # Save name
+    
+    # Checkpoint directory
+    ckpt_dir = os.path.join('/mnt/ssd/checkpoints/reranker', args.version_name)
+    os.makedirs(ckpt_dir, exist_ok=True)
+    ckpt_name = os.path.join(ckpt_dir, 'steps=%d_loss-interval=%.4f.pth')
+    ckpt_info = [[None, float('inf')] for i in range(10)]
+    
+    # Log directory
+    log_dir = os.path.join('log/reranker/pytorch_logs', args.version_name)
+    #writer = torch.utils.tensorboard.SummaryWriter(log_dir)
+    writer = SummaryWriter(log_dir)
+    os.makedirs(log_dir, exist_ok=True)
+    
+    loss_intervals = []
+    accs = []
+    for epoch in range(1):
+        running_loss = 0.0
+        running_accuracy = 0.0
+        running_lr = args.lr
+    
+        pbar = tqdm(enumerate(dataloader), total=len(dataloader))
+        for i, data in pbar:
+    
+            if not args.not_lr_schedule:
+                optimizer, running_lr = linear_learning_rate_scheduler(optimizer, i + 1, args.lr, args.train_steps / 10, args.train_steps)
+    
+            data = {key: value.to(device) for key, value in data.items()}
+            optimizer.zero_grad()
+            outputs = model(data)
+            loss = outputs.loss
+            loss.backward()
+            optimizer.step()
+    
+            running_loss += loss.item()
+            running_accuracy += torch.sum(
+                (torch.argmax(outputs.logits, dim=1) == data['labels']).type(torch.int32)).item() / len(data['labels'])
+    
+            if (i + 1) % args.measure_steps == 0:
+                # model.train(False)
+
+                avg_loss = running_loss / args.measure_steps
+                avg_acc = running_accuracy / args.measure_steps
+    
+                # print('%d, %.4f, %.4f' % (i+1, avg_loss, avg_acc))
+                writer.add_scalar('loss', avg_loss, i)
+                writer.add_scalar('acc', avg_acc, i)
+    
+                writer.add_scalar('lr', running_lr, i)
+                loss_intervals.append(avg_loss)
+                accs.append(avg_acc)
+    
+                running_loss = 0.0
+                running_accuracy = 0.0
+                # writer.flush()
+    
+                ckpt_info.sort(key=lambda x: x[1], reverse=True)
+                if avg_loss < ckpt_info[0][1]:
+                    if ckpt_info[0][0] != None:
+                        os.remove(ckpt_info[0][0])
+                    save_name = ckpt_name % (i + 1, avg_loss)
+                    torch.save(model, save_name)
+                    ckpt_info[0] = [save_name, avg_loss]
+    
+                postfix = {'loss_interval': avg_loss, 'acc': avg_acc, 'lr': running_lr}
+                pbar.set_postfix(postfix)
+    
+                # model.train(True)
+    save_name = ckpt_name % (i + 1, avg_loss)
+    torch.save(model, save_name)
+    
+    
+    writer.add_hparams(
+        {"lr": args.lr,
+         "not_lr_schedule": args.not_lr_schedule,
+         "train_steps": args.train_steps,
+         "batch_size": args.batch_size,
+         "train_data_file": args.train_data_file,
+         'ckpt_dir': args.ckpt_dir},
+        {'min_loss': min(loss_intervals),
+         'max_acc': max(accs)}
     )
-
-    # Get dataloaders
-    train_dataloader = get_dataloader()
-
-    # Train the model
-    trainer.fit(model, train_dataloader)
+    
+    writer.close()
     
 if __name__ == '__main__':
     main()

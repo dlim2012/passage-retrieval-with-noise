@@ -8,31 +8,50 @@ from tqdm import tqdm
 from collections import defaultdict
 
 import csv
+import argparse
 
-# Import the model
-from model import DPR
+
+def parse():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--vectors_dir', type=str, default='/mnt/ssd/data/ms_marco/vectors/dpr')
+    parser.add_argument('--ckpt_dir', type=str, default='/mnt/ssd/checkpoints/dpr')
+    parser.add_argument('--ckpt_version', type=str, default='0421_1_lr3e-7_ts2e5')
+    parser.add_argument('--ckpt_name', type=str, default='steps=94000_loss-interval=0.1027.pth')
+
+    parser.add_argument('--noisy_text_type', type=str, default='queries') # queries / passages
+    return parser.parse_args()
+
+args = parse()
+
+assert args.noisy_text_type in ['queries', 'passages']
 
 # Checkpoint path
-checkpoint_dir = 'checkpoints/dpr'
-train_version = '0411_1'
-checkpoint_name = 'steps=13100-loss_interval=1.2731e-01-acc=0.9544.ckpt'
-checkpoint_path = os.path.join(checkpoint_dir, train_version, checkpoint_name)
+checkpoint_path = os.path.join(args.ckpt_dir, args.ckpt_version, args.ckpt_name)
 
 # Batch size to use to encode vectors using GPU
 batch_size = 24
 
 # Path to the queries, passages, and top1000
-query_file = 'data/ms_marco/original/queries.dev.tsv'
-passage_file = 'data/ms_marco/original/collection.tsv'
-top1000_file = 'data/ms_marco/preprocessed/top1000.dev.id.tsv'
-qrels_file = 'data/ms_marco/original/qrels.dev.tsv'
+passage_file = '/mnt/ssd/data/ms_marco/passages/collection.tsv'
+query_file_0 = '/mnt/ssd/data/ms_marco/preprocessed/queries.dev.top1000.tsv'
+dev_qrels_file = '/mnt/ssd/data/ms_marco/original/qrels.dev.tsv'
 
-# Trying it with train data
-###################################################################
-#query_file = 'data/ms_marco/original/queries.train.tsv'
-#qrels_file = 'data/ms_marco/original/qrels.train.tsv'
-#top1000_file = 'data/ms_marco/preprocessed/top1000.train.id.tsv'
-###################################################################
+#
+passage_dir = '/mnt/ssd/data/ms_marco/passages'
+passage_vectors_dir = os.path.join(args.vectors_dir, args.ckpt_version, args.ckpt_name[:-4])
+passage_names = ['collection']
+if args.noisy_text_type == 'passages':
+    passage_vector_files = [os.path.join(passage_vectors_dir, name + '.npy') for name in passage_names]
+else:
+    passage_vector_files = [os.path.join(passage_vectors_dir, 'collection.npy')]
+
+query_dir = '/mnt/ssd/data/ms_marco/queries'
+query_names = ['queries.dev.top1000']
+if args.noisy_text_type == 'queries':
+    query_files = [os.path.join(query_dir, name + '.tsv') for name in query_names]
+else:
+    query_files = [os.path.join(query_dir, 'queries.dev.top1000.tsv')]
+
 
 # tokenizer
 tokenizer_name = 'bert-base-uncased'
@@ -41,7 +60,10 @@ tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
 # device
 device = torch.device('cuda')
 
-class passage_dataset(Dataset):
+#
+N_PASSAGES = 8841823
+
+class text_dataset(Dataset):
     """
     A Dataset class made to use PyTorch DataLoader
     """
@@ -54,31 +76,29 @@ class passage_dataset(Dataset):
     def __getitem__(self, idx):
         return self.data[idx]
 
-def tokenize(texts):
-    """
-    tokenize texts and return input ids and attention masks
-    """
-    inputs = tokenizer(texts, padding="longest", max_length=512, truncation=True)
-    return torch.tensor(inputs["input_ids"]), torch.tensor(inputs["attention_mask"])
-
-
 def collate_fn(lines):
     """
-    Convert query, positive passage, and negative passage to input ids and attention masks
+    Convert query, positive passage, and negative passage to input_types
     """
-    x = dict()
-    x['passage_input_ids'], x['passage_attention_mask'] = tokenize(lines)
-    return x
+    return tokenizer(lines, padding="longest", max_length=512, truncation=True, return_tensors='pt')
 
-def read_texts(text_file):
+def read_texts(text_file, only_ids=False):
     # Read passages and queries
-    texts = dict()
+    if not only_ids:
+        text_ids, texts = dict(), []
+    else:
+        text_ids = dict()
+
     with open(text_file, 'r') as file:
         reader = csv.reader(file, delimiter='\t')
         for i, line in enumerate(reader):
-            text_id, text = int(line[0]), line[1]
-            texts[text_id] = text
-    return texts
+            text_ids[int(line[0])] = i
+            if not only_ids:
+                texts.append(line[1])
+    if not only_ids:
+        return text_ids, texts
+    return text_ids
+
 
 def read_qrels(qrels_file):
     # Read qrels
@@ -90,124 +110,136 @@ def read_qrels(qrels_file):
             qrels[qid].append(pid)
     return qrels
 
-def read_top1000(top1000_file):
-    # Read top1000
-    top1000 = dict()
-    with open(top1000_file, 'r') as file:
-        reader = csv.reader(file, delimiter='\t')
-        for i, line in enumerate(reader):
-            line = list(map(int, line))
-            #for j, text_id in enumerate(line):
-                #if text_id == -1:
-                #    continue # Only using top 1000
-            top1000[line[0]] = line[1:]
-    return top1000
 
-def mrr(ranks, Q):
+def mrr(ranks, Q=1000):
     """
     Calculate the MRR(mean reciprocal rank) given the minimum ranks and Q
     """
-    reciprocal_ranks = []
+    reciprocal_ranks_Q = []
     for rank in ranks:
         if rank <= Q:
-            reciprocal_ranks.append(1/rank)
-    return np.mean(reciprocal_ranks)
+            reciprocal_ranks_Q.append(1/rank)
+        else:
+            reciprocal_ranks_Q.append(0)
+    return np.mean(reciprocal_ranks_Q)
 
-def recall(ranks, k):
-    count = 0
-    for rank in ranks:
-        if rank <= k:
-            count += 1
-    return count / len(ranks)
+def recall(ranks_all, k=10):
+    results = []
+    for ranks in ranks_all:
+        if len(ranks) == 0:
+            continue
+        count = 0
+        for rank in ranks:
+            if rank <= k:
+                count += 1
+        results.append(count / len(ranks))
+    return np.mean(results)
+
+def calculate_dense_vectors(encoder, texts, tag):
+
+    dataset = text_dataset(texts)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=10, collate_fn=collate_fn)
+
+    results = []
+    for batch in tqdm(dataloader, desc=tag):
+        batch = {key: value.to(device) for key, value in batch.items()}
+
+        # Calculate the <CLS> vectors for the top 1000 passages
+        vectors = encoder(**batch).last_hidden_state[:, 0, :].cpu().detach().numpy().astype(np.float32)
+
+        results.append(vectors)
+
+    # Get the similarity scores between query and its top 1000 passages in a 1-dimensional vector
+    results = np.concatenate(results, axis=0)
+
+    return results
+
+def calculate_scores(query_vectors, passage_vectors):
+    return torch.matmul(query_vectors, passage_vectors.T).cpu()
 
 def main():
-    model = DPR.load_from_checkpoint(checkpoint_path).to(device).eval()
+    model = torch.load(checkpoint_path).to(device)
+    model.train(False)
     print('model loaded from checkpoint %s' % checkpoint_path)
 
-    # Read passages, queries, qrels and top 1000.
-    passages = read_texts(passage_file)
-    queries = read_texts(query_file)
-    qrels = read_qrels(qrels_file)
-    top1000 = read_top1000(top1000_file)
+    pids = read_texts(passage_file, only_ids=True)
+    qrels = read_qrels(dev_qrels_file)
+    assert len(pids.keys()) == N_PASSAGES
 
-    ranks = []
-    reciprocal_ranks = []
-    for qid in tqdm(sorted(top1000.keys()), desc='queries'):
+    for passage_vector_file in passage_vector_files:
 
-        # Get the top 1000 pids for the query
-        top1000_pids = top1000[qid]
+        # Read pids and precomputed passage vectors
+        passage_vectors = np.load(passage_vector_file)
+        assert passage_vectors.shape[0] == N_PASSAGES
 
-        # Gather indices of relevant pids in the top 1000
-        rel_indices = []
-        for pid in qrels[qid]:
-            # If a relevant passage was not in the top 1000 passages, continue
-            # Else, get the index of the relevant passage
-            try:
-                idx = top1000_pids.index(pid)
-            except ValueError as e:
-                #print(e)
-                continue
-            rel_indices.append(idx)
+        # For each query files
+        for query_file in query_files:
+            # Read the query file
+            qids, queries = read_texts(query_file)
+            n_queries = len(queries)
 
-        #print("\nRelevant passage indices:", rel_indices)
+            # Calculate query vectors
+            assert len(queries) == 6980
+            query_vectors = calculate_dense_vectors(model.query_encoder, queries, 'queries')  # (N_q, d)
+            del queries
 
-        # Pass if there are no relevant passages
-        if len(rel_indices) == 0:
-            #print("query with id %d doesn't have any relevant passages" % qid)
-            continue
+            qid_list = list(qids.keys())
 
-        # Get the query text and compute its <CLS> vector
-        query = queries[qid]
-        query_input_ids, query_attention_mask = tokenize([query])
-        query_vector = model.query_encoder(
-            input_ids=query_input_ids.to(device),
-            attention_mask=query_attention_mask.to(device)
-        ).last_hidden_state[:, 0, :]
+            recall_1000 = []  # for recall@1000
+            reciprocal_ranks_mrr_10 = []
+            no_relevant_count = 0
 
-        # Use a dataloader for efficient computation
-        dataset = passage_dataset([passages[pid] for pid in top1000_pids])
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=10, collate_fn=collate_fn)
 
-        # Gather scores for each passage in the top 1000
-        results = []
-        for batch in tqdm(dataloader, leave=False):
+            pbar = tqdm(range(n_queries), desc='ranking')
+            for i in pbar:
 
-            # Calculate the <CLS> vectors for the top 1000 passages
-            passage_vectors = model.passage_encoder(
-                input_ids=batch['passage_input_ids'].to(device),
-                attention_mask=batch['passage_attention_mask'].to(device)
-            ).last_hidden_state[:, 0, :]
+                # Calculate the scores between each query and each passage
+                scores = torch.tensor(np.dot(query_vectors[i:i+1], passage_vectors.T)[0])
 
-            # Calculate the scores between query and each passage
-            scores = torch.matmul(query_vector, passage_vectors.T).cpu().detach().numpy()
+                # Get the top 10 and top 1000 indices
+                top10_indices = torch.topk(scores, 10).indices.tolist()
+                top1000_indices = torch.topk(scores, 1000).indices.tolist()
 
-            # Append the similarity scores for passages in a batch to a list
-            results.append(scores)
+                qid = qid_list[i]
+                rel_indices = [pids[pid] for pid in qrels[qid] if pid in pids.keys()]
 
-        # Get the similarity scores between query and its top 1000 passages in a 1-dimensional vector
-        results = np.concatenate(results, axis=1)[0]
+                if len(rel_indices) == 0:
+                    no_relevant_count += 1
+                    reciprocal_ranks_mrr_10.append(0)
+                    continue
 
-        # argsort the similarity scores in descending order
-        argsort = np.argsort(results)[::-1].tolist()
+                recall_1000_count = 0
+                min_rank = 11
+                for rel_index in rel_indices:
+                    if rel_index in top1000_indices:
+                        recall_1000_count += 1
+                    if rel_index in top10_indices:
+                        try:
+                            rank = top10_indices.index(rel_index) + 1
+                        except:
+                            continue
+                        min_rank = min(min_rank, rank)
 
-        # For each passage that are relevant to the query
-        ranks_qid = []
-        for idx in rel_indices:
 
-            # Find the rank
-            rank = argsort.index(idx) + 1
-            ranks_qid.append(rank)
-            print('\nrank: %d/%d' % (rank, len(top1000_pids)))
+                recall_1000.append(recall_1000_count / len(rel_indices))
+                if min_rank != 11:
+                    reciprocal_ranks_mrr_10.append(1 / min_rank)
+                else:
+                    reciprocal_ranks_mrr_10.append(0)
 
-        # Append results
-        ranks.append(min(ranks_qid))
-        reciprocal_ranks.append(1/min(ranks_qid))
+                # Print imtermediate results in the progress bar
+                postfix = {'mrr': np.mean(reciprocal_ranks_mrr_10),
+                           'recall': np.mean(recall_1000)
+                           }
 
-    # Print out the measurements
-    print('\trecall: (%d: %.4f), (%d: %.4f), (%d: %.4f), (%d: %.4f)'\
-          % (10, recall(ranks, 10), 20, recall(ranks, 20), 50, recall(ranks, 50), 100, recall(ranks, 100)))
-    print('\tmrr: %.4f' % np.mean(reciprocal_ranks))
+                pbar.set_postfix(postfix)
 
-    
+            print('passage_vector_file:', passage_vector_file)
+            print('query_file:', query_file)
+            print('\trecall@1000:', np.mean(recall_1000))
+            print('\tmrr@10:', np.mean(reciprocal_ranks_mrr_10))
+            print('\tno_relevant_count: %d/%d' % (no_relevant_count, n_queries))
+
+
 if __name__ == '__main__':
     main()
