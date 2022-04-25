@@ -5,6 +5,9 @@ from tqdm import tqdm
 import string
 import sys
 from concurrent.futures import ThreadPoolExecutor
+import nltk
+from inflection import pluralize, singularize
+nltk.download('omw-1.4')
 
 # Set the reading and saving directories
 read_dir = '/mnt/ssd/data/ms_marco/original'
@@ -21,9 +24,12 @@ character_choices += string.digits
 character_choices += string.punctuation
 character_choices += [' ', '\t', '\n'] # some white spaces
 
+lemmatizer = nltk.stem.WordNetLemmatizer()
+
 def word_order_swap(text, adjacent=False):
     """
     swap word order
+    swap neighboring word order if the parameter 'adjacent' is 'True'
     """
     sentences = text.split('.')
     for i in range(len(sentences)):
@@ -84,7 +90,7 @@ def one_character_error(text, error_type):
 def character_error(text, error_type, p=0.1):
     """
     Each word with prob p
-    At least one error induced
+    Repeat the process if no word has been attempted to be changed
     """
     words = text.split(' ')
 
@@ -119,6 +125,49 @@ def character_error(text, error_type, p=0.1):
 
     return ' '.join(words)
 
+def lemmatize(text, p=0.5):
+    """
+    Lemmatize each word with probability of p
+    Repeat the process if no word has been attempted to be changed
+    """
+
+    words = text.split(' ')
+
+    n_changed = 0
+    while n_changed == 0:
+        for i, word in enumerate(words):
+            if random.random() > p:
+                continue
+
+            words[i] = lemmatizer.lemmatize(word)
+
+            n_changed += 1
+
+    return ' '.join(words)
+
+def pluralize_singlurzie(text, p=0.5):
+    """
+    With probability of (1-p)/2, pluralize each word
+    With probability of (1-p)/2, singularize each word
+    Repeat the process if no word has been attempted to be changed
+    """
+    words = text.split(' ')
+
+    n_changed = 0
+    while n_changed == 0:
+        for i, word in enumerate(words):
+            if random.random() > p:
+                continue
+
+            if random.random() > 0.5:
+                words[i] = singularize(word)
+            else:
+                words[i] = pluralize(word)
+            n_changed += 1
+
+    return ' '.join(words)
+
+
 def generate_noise(read_path, save_path, function, args, desc):
 
     writer = open(save_path, 'w')
@@ -141,13 +190,17 @@ def generate_noise(read_path, save_path, function, args, desc):
 noise_functions = {
     'word_order_swap': (word_order_swap, {'adjacent': False}),
     'word_adjacent_swap': (word_order_swap, {'adjacent': True}),
-    #'one_character_deletion': (one_character_error, {'error_type': 'deletion'}),
-    #'one_character_insertion': (one_character_error, {'error_type': 'insertion'}),
-    #'one_neighboring_character_swap': (one_character_error, {'error_type': 'neighboring_swap'}),
     'character_deletion': (character_error, {'error_type': 'deletion'}),
     'character_insertion': (character_error, {'error_type': 'insertion'}),
     'neighboring_character_swap': (character_error, {'error_type': 'neighboring_swap'}),
+    'lemmatize_0.5': (lemmatize, {'p': 0.5}),
+    'pluralize_singlurize_0.5': (pluralize_singlurzie, {'p': 0.5})
 }
+
+
+# 'one_character_deletion': (one_character_error, {'error_type': 'deletion'}),
+# 'one_character_insertion': (one_character_error, {'error_type': 'insertion'}),
+# 'one_neighboring_character_swap': (one_character_error, {'error_type': 'neighboring_swap'}),
 
 def main():
     filenames = [queries_dev_filename, passages_filename]
@@ -161,6 +214,7 @@ def main():
             desc = '.'.join([filename, key])
 
             threadpool.submit(generate_noise, read_path, write_path, function, args, desc)
+            #generate_noise(read_path, write_path, function, args, desc)
 
 if __name__ == '__main__':
     main()
