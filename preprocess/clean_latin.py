@@ -1,3 +1,8 @@
+"""
+References:
+https://www.utf8-chartable.de/unicode-utf8-table.pl?start=8192&number=128&utf8=string-literal
+https://grabthiscode.com/python/encode-decode-python-a-x80-x99
+"""
 import os
 import csv
 
