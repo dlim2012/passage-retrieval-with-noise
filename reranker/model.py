@@ -1,8 +1,5 @@
 import torch
-from transformers import BertModel, BertForNextSentencePrediction
-
-
-#################### Model
+from transformers import BertForNextSentencePrediction
 
 class Reranker(torch.nn.Module):
     def __init__(self):
