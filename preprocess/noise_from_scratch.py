@@ -1,3 +1,4 @@
+
 import random
 import os
 import csv
@@ -7,6 +8,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 import nltk
 from inflection import pluralize, singularize
+
 nltk.download('omw-1.4')
 
 # Set the reading and saving directories
@@ -22,13 +24,34 @@ character_choices += string.ascii_lowercase
 character_choices += string.ascii_uppercase
 character_choices += string.digits
 character_choices += string.punctuation
-character_choices += [' ', '\t', '\n'] # some white spaces
+character_choices += [' ', '\t', '\n']  # some white spaces
 
 lemmatizer = nltk.stem.WordNetLemmatizer()
 
+
+def indices_to_change(words, p):
+    indices = []
+    if p == -1:
+        max_word_length = max([len(word) for word in words])
+        candidates = []
+        if max_word_length > 3:
+            for i, word in enumerate(words):
+                if len(word) > 3:
+                    candidates.append(i)
+        else:
+            for i, word in enumerate(words):
+                if len(word) == max_word_length:
+                    candidates.append(i)
+        indices.append(random.choice(candidates))
+    else:
+        for i in range(len(words)):
+            if random.random() < p:
+                indices.append(i)
+    return indices
+
 def word_order_swap(text, adjacent=False):
     """
-    swap word order
+    swap word order in each sentence
     swap neighboring word order if the parameter 'adjacent' is 'True'
     """
     sentences = text.split('.')
@@ -37,7 +60,7 @@ def word_order_swap(text, adjacent=False):
         if len(words) < 2:
             continue
         if adjacent:
-            idx1 = random.choice([_ for _ in range(len(words)-1)])
+            idx1 = random.choice([_ for _ in range(len(words) - 1)])
             idx2 = idx1 + 1
         else:
             idx1, idx2 = random.sample([_ for _ in range(len(words))], k=2)
@@ -45,47 +68,6 @@ def word_order_swap(text, adjacent=False):
         sentences[i] = ' '.join(words)
     return '.'.join(sentences)
 
-def one_character_error(text, error_type):
-    words = text.split(' ')
-
-    # Get the maximum word length
-    max_word_length = max([len(word) for word in words])
-    if max_word_length < 3:
-        print(' '.join(words))
-
-    keyword_indices = []
-    for i, word in enumerate(words):
-        # If the maximum word length is bigger than 3, choose a word from words with length bigger than 3
-        if max_word_length > 3:
-            if len(word) > 3:
-                keyword_indices.append(i)
-        # If the maximum word length is not bigger than 3, choose a word with the maximum word length
-        else:
-            if len(word) == max_word_length:
-                keyword_indices.append(i)
-
-    index = random.choice(keyword_indices)
-    word_to_change = words[index]
-
-    if error_type == 'deletion':
-        x = random.randrange(0, len(word_to_change))
-        word_to_change = word_to_change[:x] + word_to_change[x+1:]
-    elif error_type == 'insertion':
-        x = random.randrange(0, len(word_to_change)+1)
-        character_to_add = random.choice(character_choices)
-        word_to_change = word_to_change[:x] + character_to_add + word_to_change[x:]
-    elif error_type == 'neighboring_swap':
-        try:
-            x = random.randrange(0, len(word_to_change)-1)
-            word_to_change = word_to_change[:x] + word_to_change[x+1] + word_to_change[x] + word_to_change[x+2:]
-        except:
-            pass
-    else:
-        print('%s is not a valid parameter for the character_error function.')
-        sys.exit(1)
-
-    words[index] = word_to_change
-    return ' '.join(words)
 
 def character_error(text, error_type, p=0.1):
     """
@@ -94,34 +76,32 @@ def character_error(text, error_type, p=0.1):
     """
     words = text.split(' ')
 
-    n_changed = 0
-    while n_changed == 0:
-        for i, word in enumerate(words):
-            if random.random() > p:
-                continue
+    indices = indices_to_change(words, p)
 
-            if error_type == 'deletion':
-                try:
-                    x = random.randrange(0, len(word))
-                    word = word[:x] + word[x+1:]
-                except:
-                    pass
-            elif error_type == 'insertion':
-                x = random.randrange(0, len(word)+1)
-                character_to_add = random.choice(character_choices)
-                word = word[:x] + character_to_add + word[x:]
-            elif error_type == 'neighboring_swap':
-                try:
-                    x = random.randrange(0, len(word)-1)
-                    word = word[:x] + word[x+1] + word[x] + word[x+2:]
-                except:
-                    pass
-            else:
-                print('%s is not a valid parameter for the character_error function.')
-                sys.exit(1)
+    for idx in indices:
+        word = words[idx]
 
-            words[i] = word
-            n_changed += 1
+        if error_type == 'deletion':
+            try:
+                x = random.randrange(0, len(word))
+                word = word[:x] + word[x + 1:]
+            except:
+                pass
+        elif error_type == 'insertion':
+            x = random.randrange(0, len(word) + 1)
+            character_to_add = random.choice(character_choices)
+            word = word[:x] + character_to_add + word[x:]
+        elif error_type == 'neighboring_swap':
+            try:
+                x = random.randrange(0, len(word) - 1)
+                word = word[:x] + word[x + 1] + word[x] + word[x + 2:]
+            except:
+                pass
+        else:
+            print('%s is not a valid parameter for the character_error function.')
+            sys.exit(1)
+
+        words[idx] = word
 
     return ' '.join(words)
 
@@ -133,43 +113,77 @@ def lemmatize(text, p=0.5):
 
     words = text.split(' ')
 
-    n_changed = 0
-    while n_changed == 0:
-        for i, word in enumerate(words):
-            if random.random() > p:
-                continue
+    indices = indices_to_change(words, p)
 
-            words[i] = lemmatizer.lemmatize(word)
-
-            n_changed += 1
+    for idx in indices:
+        word = words[idx]
+        words[idx] = lemmatizer.lemmatize(word)
 
     return ' '.join(words)
 
-def pluralize_singlurzie(text, p=0.5):
+
+def pluralize_singularize(text, p=0.5):
     """
-    With probability of (1-p)/2, pluralize each word
-    With probability of (1-p)/2, singularize each word
+    With probability of p/2, pluralize each word
+    With probability of p/2, singularize each word
     Repeat the process if no word has been attempted to be changed
     """
     words = text.split(' ')
+    indices = indices_to_change(words, p)
 
-    n_changed = 0
-    while n_changed == 0:
-        for i, word in enumerate(words):
-            if random.random() > p:
-                continue
+    for idx in indices:
+        word = words[idx]
 
-            if random.random() > 0.5:
-                words[i] = singularize(word)
-            else:
-                words[i] = pluralize(word)
-            n_changed += 1
+        if random.random() > 0.5:
+            words[idx] = singularize(word)
+        else:
+            words[idx] = pluralize(word)
 
     return ' '.join(words)
 
 
-def generate_noise(read_path, save_path, function, args, desc):
+def remove_space(text, p=0.1):  # 6980
+    words = text.split(' ')
 
+    indices = set()
+    if p == -1:
+        if len(words) > 1:
+            indices.add(random.randrange(0, len(words)-1))
+    else:
+        for idx in range(len(words)-1):
+            if random.random() < p:
+                indices.add(idx)
+
+    result = ''
+    for idx, word in enumerate(words):
+        if idx not in indices:
+            result += ' '
+        result += words[idx]
+
+    return result
+
+def remove_stopwords(text, p=0.2):
+    words = text.split(' ')
+
+    stopwords = nltk.corpus.stopwords.words('english')
+
+    indices = []
+    for idx, word in enumerate(words):
+        if word in stopwords:
+            indices.append(idx)
+
+    if p == -1:
+        if len(indices) >= 1:
+            indices = [random.choice(indices)]
+    else:
+        indices = [idx for idx in indices if random.random() < p]
+
+    result = [words[idx] for idx in range(len(words)) if idx not in indices]
+
+    return ' '.join(result)
+
+
+def generate_noise(read_path, save_path, function, args, desc):
     writer = open(save_path, 'w')
 
     file_len = 0
@@ -187,34 +201,52 @@ def generate_noise(read_path, save_path, function, args, desc):
             writer.write('%s\t%s\n' % (text_id, noisy_text))
 
 
-noise_functions = {
-    'word_order_swap': (word_order_swap, {'adjacent': False}),
-    'word_adjacent_swap': (word_order_swap, {'adjacent': True}),
-    'character_deletion': (character_error, {'error_type': 'deletion'}),
-    'character_insertion': (character_error, {'error_type': 'insertion'}),
-    'neighboring_character_swap': (character_error, {'error_type': 'neighboring_swap'}),
-    'lemmatize_0.5': (lemmatize, {'p': 0.5}),
-    'pluralize_singlurize_0.5': (pluralize_singlurzie, {'p': 0.5})
-}
-
-
-# 'one_character_deletion': (one_character_error, {'error_type': 'deletion'}),
-# 'one_character_insertion': (one_character_error, {'error_type': 'insertion'}),
-# 'one_neighboring_character_swap': (one_character_error, {'error_type': 'neighboring_swap'}),
 
 def main():
-    filenames = [queries_dev_filename, passages_filename]
-    threadpool = ThreadPoolExecutor(5)
+    noise_functions = [
+        ('word_order_swap', passages_filename, word_order_swap, {'adjacent': False}),
+        ('word_order_swap_adjacent', queries_dev_filename, word_order_swap, {'adjacent': True}),
+        ('neighboring_character_swap_one', queries_dev_filename, character_error, {'error_type': 'neighboring_swap', 'p': -1}),
+        ('remove_space_one', queries_dev_filename, remove_space, {'p': -1}),
+        ('lemmatize_0.5', queries_dev_filename, lemmatize, {'p': 0.5}),
+        ('remove_stopwords_one', queries_dev_filename, remove_stopwords, {'p': -1}),
 
-    for filename in filenames:
+        ('word_order_swap', queries_dev_filename, word_order_swap, {'adjacent': False}),
+        ('word_order_swap_adjacent', passages_filename, word_order_swap, {'adjacent': True}),
+        ('neighboring_character_swap_0.1', passages_filename, character_error, {'error_type': 'neighboring_swap', 'p': 0.1}), #v
+        ('remove_space_0.1', passages_filename, remove_space, {'p': 0.1}), #v
+        ('lemmatize_0.5', passages_filename, lemmatize, {'p': 0.5}), #v
+        ('remove_stopwords_0.2', passages_filename, remove_stopwords, {'p': 0.2}),
+
+
+
+        ('lemmatize_1', queries_dev_filename, lemmatize, {'p': 1}),
+        ('remove_stopwords_0.5', queries_dev_filename, remove_stopwords, {'p': 0.5}),
+
+        ('lemmatize_1', passages_filename, lemmatize, {'p': 1}),
+        ('remove_stopwords_0.5', passages_filename, remove_stopwords, {'p': 0.5}),
+
+        # ('pluralize_singularize_0.5', queries_dev_filename, pluralize_singularize, {'p': 0.5}),
+        # ('pluralize_singularize_0.5', passages_filename, pluralize_singularize, {'p': 0.5})
+    ]
+
+    noise_functions = [
+        ('remove_space_one', queries_dev_filename, remove_space, {'p': -1}),
+        ('remove_space_0.1', passages_filename, remove_space, {'p': 0.1}), #v
+    ]
+
+    threadpool = ThreadPoolExecutor(10)
+
+    for key, filename, function, args in noise_functions:
         read_path = os.path.join(read_dir, '.'.join([filename, 'tsv']))
-        for key, value in noise_functions.items():
-            write_path = os.path.join(save_dir, '.'.join([filename, key, 'tsv']))
-            function, args = value
-            desc = '.'.join([filename, key])
+        write_path = os.path.join(save_dir, '.'.join([filename, key, 'tsv']))
 
-            threadpool.submit(generate_noise, read_path, write_path, function, args, desc)
-            #generate_noise(read_path, write_path, function, args, desc)
+        desc = '.'.join([filename, key])
+
+        #threadpool.submit(generate_noise, read_path, write_path, function, args, desc)
+        generate_noise(read_path, write_path, function, args, desc)
+
+
 
 if __name__ == '__main__':
     main()
