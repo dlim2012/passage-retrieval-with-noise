@@ -28,11 +28,11 @@ with open(qidpidtriples_shuffled_file, 'r') as read_file:
 
         if i < n_validation_relevant_pair:
 
-            validation_pairs.add((qid, pid1))
+            validation_pairs.add(qid)
 
             validation_writer.write('%s\t%s\t%s\n' % (queries[qid], passages[pid1], passages[pid2]))
         else:
-            if not (qid, pid1) in validation_pairs:
+            if not qid in validation_pairs:
                 train_writer.write('%s\t%s\t%s\n' % (queries[qid], passages[pid1], passages[pid2]))
                 train_datapoint_count += 1
 
