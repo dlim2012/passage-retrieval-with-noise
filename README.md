@@ -75,7 +75,7 @@ python3 train.py --model_name colbert --version_name v1
 * Arguments that are not required
 --train_data_file: path to train data file (default: preprocessed train file)
 --validation_data_file: path to validation data file (default: preprocessed train file)
---batch_size: batch size that will be used in train (default: 24)
+--batch_size: batch size that will be used in train (default: 22)
 --n_train_steps: maximum train steps (default: 200000)
 --n_validation_steps: number of validation steps at each interval (default: 1000)
 --lr: learning rate (default: 3e-7)
@@ -112,21 +112,20 @@ Evaluation: MRR@10, Recall@10
 
 ### Code example
 ```bash
-python evaluate_rerank.py --model_name reranker --ckpt_version v1 --ckpt_name 
+python evaluate_rerank.py --model_name reranker --ckpt_version v1 --ckpt_name steps=116000_loss-interval=0.2303.pth
 ```
 ### Arguments
 ```text
-
 --model_name: (Required) the name of the model ('reranker', 'dpr', 'colbert')
 
 --ckpt_dir: directory to save checkpoints (default: ckpt_dir saved in preprocess/tools/paths)
---ckpt_version: the name of the train version (e.g. 'v1')
---ckpt_name: the name of the checkpoint (e.g. 'steps=116000_loss-interval=0.2303.pth')
+--ckpt_version: the name of the train version
+--ckpt_name: the name of the checkpoint
 --mode: one of the followings.
     'original': measure base performance
     'noisy_queries': measure performance on noisy queries
     'noisy_passages': measure performance on noisy passages
---batch_size: batch size that will be used in train (default: 24)
+--batch_size: batch size that will be used in train (default: 22)
 
 # Only for reranker
 # (collate_fn2 truncates queries at size 64)
@@ -136,22 +135,64 @@ python evaluate_rerank.py --model_name reranker --ckpt_version v1 --ckpt_name
 --N_q: query token length for ColBERT (default: 32)
 --vector_size: vector size of each token for ColBERT (default: 128)
 ```
+
+## Precompute
+
+precompute dense vectors for the 8.8 million passages in the 'collection.tsv' file using a trained dpr model.
+
+### Code example
+```bash
+python precompute.py --ckpt_version v1 --ckpt_name steps=116000_loss-interval=0.2303.pth
+```
+
+### Arguments
+--model_name: (Not required) the name of the model (only available option: 'dpr')
+
+--ckpt_dir: directory to save checkpoints (default: ckpt_dir saved in preprocess/tools/paths)
+--ckpt_version: the name of the train version 
+--ckpt_name: the name of the checkpoint
+--vectors_dir: the directory that all vector files are saved. (default: vectors_dir saved in preprocess/tools/paths)
+    (ckpt_name will be used to locate the file assuming that the file was saved through precompute.py)
+    
+--batch_size: batch size that will be used in train (default: 22)
+--mode: one of the followings.
+    'original': measure base performance
+    'noisy_queries': measure performance on noisy queries
+    'noisy_passages': measure performance on noisy passages
+```
 ## Evaluate retrieval
 
 Task: retrieve passages from a collection of about 8.8 million passages
 
 Evaluation: MRR@10, Recall@1000
+### Code example
+```bash
+python evaluate_retrieval.py --ckpt_version v1 --ckpt_name steps=116000_loss-interval=0.2303.pth
+```
+### Arguments
+```text
+--model_name: (Not required) the name of the model (only available option: 'dpr')
 
+--ckpt_dir: directory to save checkpoints (default: ckpt_dir saved in preprocess/tools/paths)
+--ckpt_version: the name of the train version 
+--ckpt_name: the name of the checkpoint
+--vectors_dir: the directory that all vector files are saved. (default: vectors_dir saved in preprocess/tools/paths)
+    (ckpt_name will be used to locate the file assuming that the file was saved through precompute.py)
+    
+--batch_size: batch size that will be used in train (default: 22)
+--mode: one of the followings.
+    'original': measure base performance
+    'noisy_queries': measure performance on noisy queries
+    'noisy_passages': measure performance on noisy passages
+```
 ## Others
 
 ### Clean Latin-1 and some other characters
-
 ```bash
-python3 preprocess/clean_latin.py # generate cleaned texts to '(path to data_dir)/ms_marco/preprocesesed'
+python3 preprocess/clean_latin.py # result: latin_cleaned_dir saved in preprocess/tools/paths
 ```
 
 ### Make dataset with about top 20~30 BM25 results as "hard negatives"
-
 (Using this dataset didn't give better results)
 ```bash
 python3 preprocess/top1000_bm25.py # Rerank top 1000, needed about 60-64GB of memory and a few days
