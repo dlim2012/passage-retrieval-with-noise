@@ -1,7 +1,3 @@
-
-
-Transformer, nltk, Okapi~(rank_bm25), PyTorch, googletrans, tensorboardX
-
 ## Preprocess files
 
 ### 1) Download data from the official website
