@@ -1,25 +1,18 @@
 import os
 
 # Directory for MS Marco dataset
-data_dir = '/mnt/ssd/data/ms_marco'
+data_dir = 'data/ms_marco'
 
 # Directory to save checkpoints
-ckpt_dir = '/mnt/hdd/final/checkpoints'
+ckpt_dir = 'checkpoints'
 
 # Directory to save vectors
-vectors_dir = '/mnt/hdd/final/vectors'
-
-#data_dir = '../data/ms_marco'
-#ckpt_dir = '../checkpoints'
-#vectors_dir = '../vectors'
+vectors_dir = 'vectors'
 
 ######################## Directories
 read_dir = os.path.join(data_dir, 'original')
 write_dir = os.path.join(data_dir, 'preprocessed')
 noisy_dir = os.path.join(write_dir, 'noisy')
-#reranker_dir = os.path.join(write_dir, 'reranker')
-#dpr_dir = os.path.join(write_dir, 'dpr')
-#colbert_dir = os.path.join(write_dir, 'colbert')
 latin_cleaned_dir = os.path.join(data_dir, 'latin_cleaned')
 
 os.makedirs(write_dir, exist_ok=True)
