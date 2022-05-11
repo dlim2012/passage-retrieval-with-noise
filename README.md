@@ -1,3 +1,7 @@
+
+
+Transformer, nltk, Okapi~(rank_bm25), PyTorch, googletrans, tensorboardX
+
 ## Preprocess files
 
 ### 1) Download data from the official website
@@ -15,13 +19,7 @@ Official website: https://microsoft.github.io/msmarco/
 * (Optional) triples.train.small.tsv
 * (Optional) top1000.train.txt
 
-#### Save directory
-
-
-2) Save the downloaded files in the following folder: "data/ms_marco/original/"
-
-(The base directory for text files, checkpoints, and precomputed vectors can be changed by changing the 'data_dir', 'ckpt_dir', 'vectors_dir' variables that are in the top of 'preprocess/tools/paths.py'.)
-
+Save the downloaded files in the following folder: "data/ms_marco/original/"
 
 ### 2) Make the main train and validation set
 
@@ -142,6 +140,7 @@ python precompute.py --ckpt_version v1 --ckpt_name steps=116000_loss-interval=0.
 ```
 
 ### Arguments
+```text
 --model_name: (Not required) the name of the model (only available option: 'dpr')
 
 --ckpt_dir: directory to save checkpoints (default: ckpt_dir saved in preprocess/tools/paths)
