@@ -1,0 +1,7 @@
+*Used packages
+PyTorch 1.10.1
+Transformer 4.12.2 (HuggingFace)
+googletrans 3.1.0a0
+rank-bm25 0.2.2
+tensorboardX 2.5
+numpy 1.19.5
