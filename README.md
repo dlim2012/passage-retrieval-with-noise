@@ -69,7 +69,7 @@ python3 train.py --model_name colbert --version_name v1
 --n_train_steps: maximum train steps (default: 200000)
 --n_validation_steps: number of validation steps at each interval (default: 1000)
 --lr: learning rate (default: 3e-7)
---not_lr_schedule: using this argument will disable linear learning rate scheduling
+--not_lr_schedule: using this argument will disable linear learning rate scheduling (default: use lr scheduling)
 --warm_up_steps: number of warm-up steps for linear learning rate schedule (default: 20000)
 --linear_decay_steps: number of steps that the learning rate becomes 0 (default: 200000)
 --measure_steps: number of steps of the interval that validation is performed (default: 1000)
@@ -78,7 +78,7 @@ python3 train.py --model_name colbert --version_name v1
 # Only for reranker
 # (collate_fn2 truncates queries at size 64)
 --collate_fn2: use this argument to change input types (default: truncate only at length 512)
---npr: negative to positive ratio for training data (npr >= 1)
+--npr: negative to positive ratio for training data (npr >= 1) (default: 1)
 
 # Only for ColBERT
 --N_q: query token length for ColBERT (default: 32)
