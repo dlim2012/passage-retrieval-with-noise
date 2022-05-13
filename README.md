@@ -46,6 +46,7 @@ python3 preprocess/noisy_backtranslation.py
 
 ## Train models
 
+### Code examples
 ```bash
 # Train the Reranker model
 python3 train.py --model_name reranker --version_name v1
@@ -56,7 +57,7 @@ python3 train.py --model_name dpr --version_name v1
 # Train ColBERT model
 python3 train.py --model_name colbert --version_name v1
 ```
-#### Arguments
+### Arguments
 ```text
 * Required arguments
 --model_name: name of the model to train. ('reranker', 'dpr', 'colbert')
