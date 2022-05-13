@@ -44,6 +44,8 @@ python3 preprocess/noisy_backtranslation.py --make_initial_copy
 python3 preprocess/noisy_backtranslation.py
 ```
 
+Some examples of the noisy texts are shown in the 'example_texts' directory
+
 ## Train models
 
 ### Code examples
