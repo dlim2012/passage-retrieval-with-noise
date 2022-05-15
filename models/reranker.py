@@ -24,7 +24,7 @@ class Reranker(torch.nn.Module):
     def forward(self, batch):
         inputs = {key: value.to(self.device) for key, value in batch.items() if key != 'labels'}
 
-        outputs = self.encoder(**inputs).last_hidden_state[:, 0, :]
+        outputs = self.linear(self.encoder(**inputs).last_hidden_state[:, 0, :])
 
         return outputs
 
