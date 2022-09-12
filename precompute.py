@@ -102,7 +102,7 @@ def main():
         np.save(save_file, passage_vectors)
         print('%s saved' % save_file)
 
-        # Repeat variables before repetition for memory efficiency
+        # Delete variables before repetition for memory efficiency
         del pids, passages, passage_vectors
 
 if __name__ == '__main__':
