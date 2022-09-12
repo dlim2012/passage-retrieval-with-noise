@@ -40,7 +40,7 @@ python3 preprocess/noisy.py
 # Split passage and query files into small files
 python3 preprocess/noisy_backtranslation.py --make_initial_copy
 
-# Perform backtranslation (some files may not be converted at once due to disconnection. -> Repeat)
+# Perform backtranslation (some files may not be converted at once due to disconnection. -> Need to repeat the following line.)
 python3 preprocess/noisy_backtranslation.py
 ```
 
