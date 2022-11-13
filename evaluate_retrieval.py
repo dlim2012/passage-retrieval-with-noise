@@ -35,30 +35,31 @@ def parse():
 
     return args
 
-args = parse()
-
-# Change directories if specified through arguments
-if args.ckpt_dir != 'default':
-    ckpt_dir = args.ckpt_dir
-if args.vectors_dir != 'default':
-    vectors_dir = args.vectors_dir
-
-# Checkpoint path
-checkpoint_path = os.path.join(ckpt_dir, args.model_name, args.ckpt_version, args.ckpt_name)
-passage_vectors_dir = os.path.join(vectors_dir, args.ckpt_version, args.ckpt_name[:-4])
-
-# Tokenizer
-tokenizer_name = 'bert-base-uncased'
-tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
-
-# Device
-device = torch.device('cuda')
-
-# Number of passages
-N_PASSAGES = 8841823
 
 
 def main():
+    args = parse()
+
+    # Change directories if specified through arguments
+    if args.ckpt_dir != 'default':
+        ckpt_dir = args.ckpt_dir
+    if args.vectors_dir != 'default':
+        vectors_dir = args.vectors_dir
+
+    # Checkpoint path
+    checkpoint_path = os.path.join(ckpt_dir, args.model_name, args.ckpt_version, args.ckpt_name)
+    passage_vectors_dir = os.path.join(vectors_dir, args.ckpt_version, args.ckpt_name[:-4])
+
+    # Tokenizer
+    tokenizer_name = 'bert-base-uncased'
+    tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
+
+    # Device
+    device = torch.device('cuda')
+
+    # Number of passages
+    N_PASSAGES = 8841823
+    
     # Load the model
     model = torch.load(checkpoint_path).to(device)
     model.train(False)
