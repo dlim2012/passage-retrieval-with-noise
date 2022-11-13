@@ -60,13 +60,6 @@ def parse():
     return args
 
 
-args = parse()
-
-# If not specified, use default train and validation data files
-if args.train_data_file != 'default':
-    train_data_file = args.train_data_file
-if args.validation_data_file != 'default':
-    validation_data_file = args.validation_data_file
 
 #################### Tools
 
@@ -91,6 +84,14 @@ def linear_learning_rate_scheduler(optimizer, steps, target, warm_up, decay):
 
 
 def main():
+    args = parse()
+
+    # If not specified, use default train and validation data files
+    if args.train_data_file != 'default':
+        train_data_file = args.train_data_file
+    if args.validation_data_file != 'default':
+        validation_data_file = args.validation_data_file
+    
     # Get the device
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
