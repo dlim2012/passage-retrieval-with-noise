@@ -37,23 +37,24 @@ def parse():
 
     return args
 
-args = parse()
-
-if args.ckpt_dir != 'default':
-    ckpt_dir = args.ckpt_dir
-if args.vectors_dir != 'default':
-    vectors_dir = args.vectors_dir
-
-# Checkpoint path
-checkpoint_path = os.path.join(ckpt_dir, 'dpr', args.ckpt_version, args.ckpt_name)
-
-
-# Directories
-save_dir = os.path.join(vectors_dir, args.ckpt_version, args.ckpt_name[:-4])
-os.makedirs(save_dir, exist_ok=True)
-
 
 def main():
+
+    args = parse()
+
+    if args.ckpt_dir != 'default':
+        ckpt_dir = args.ckpt_dir
+    if args.vectors_dir != 'default':
+        vectors_dir = args.vectors_dir
+
+    # Checkpoint path
+    checkpoint_path = os.path.join(ckpt_dir, 'dpr', args.ckpt_version, args.ckpt_name)
+
+
+    # Directories
+    save_dir = os.path.join(vectors_dir, args.ckpt_version, args.ckpt_name[:-4])
+    os.makedirs(save_dir, exist_ok=True)
+
     # Device
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
