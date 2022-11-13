@@ -47,12 +47,11 @@ def parse():
     assert args.mode in ['original', 'noisy_queries', 'noisy_passages']
     return args
 
-args = parse()
-
-if args.ckpt_dir != 'default':
-    ckpt_dir = args.ckpt_dir
-
 def main():
+    args = parse()
+
+    if args.ckpt_dir != 'default':
+        ckpt_dir = args.ckpt_dir
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Set dataloader arguments for each possible model
