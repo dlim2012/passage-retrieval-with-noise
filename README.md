@@ -1,3 +1,6 @@
+# BERT-based Passage Retrieval and Ranking on Texts with Typos
+This project analyzes the effect of character or grammatical errors on the performance of BERT-based dense information retrieval models. The results are shown in [this document](https://github.com/dlim2012/passage-retrieval-with-noise/blob/main/cs685_s22_final_report_.pdf).
+
 ## Preprocess files
 
 ### 1) Download data from the official website
